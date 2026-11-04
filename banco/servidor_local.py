@@ -22,6 +22,8 @@ Uso
 """
 import argparse
 import base64
+import datetime
+import hashlib
 import hmac
 import io
 import json
@@ -45,6 +47,7 @@ import gate_fidelidad as gate  # noqa: E402
 import gate_reforzado as refuerzo  # noqa: E402
 import medir_tokens  # noqa: E402
 import pypdfium2 as pdfium  # noqa: E402
+import transcripcion  # noqa: E402  (banco/transcripcion.py: Claude visión, capa NO verificada)
 from docx import Document  # noqa: E402
 from docx.enum.style import WD_STYLE_TYPE  # noqa: E402
 from docx.shared import Pt, RGBColor  # noqa: E402
@@ -56,6 +59,7 @@ TOPE_TEXTO = 20 * 1024 * 1024      # bytes de un .md subido o del JSON de re-ver
 TOPE_DESCARTE = 1024 * 1024        # cuerpo pequeño que se lee y se tira al rechazar una petición
 ESCALA_IMAGEN = 1.5                # 1.5 × 72 dpi = 108 dpi
 ESTILO_MARCA = "Marca de página"   # estilo del párrafo "p. N" en el .docx
+ESTILO_TRANSCRIPCION = "Transcripción asistida"  # texto leído por Claude en imágenes: NO verificado
 RE_ID = re.compile(r"[0-9a-f]{32}")
 RE_IMAGEN = re.compile(r"(\d{1,5})\.png")
 RE_MODELO = re.compile(r"[a-z0-9][a-z0-9.\-]{0,63}")
@@ -183,10 +187,11 @@ def vista(carpeta: Path) -> dict:
         informe = leer_json(carpeta / "informe.json")
         preambulo, segmentos = segmentos_md(leer_md(carpeta))
         retiros = leer_retiros(carpeta)
+        transcripciones = leer_transcripciones(carpeta)
     permitido, causa = politica_docx(informe, segmentos)
     return {"id": carpeta.name, "nombre_pdf": meta["nombre_pdf"], "origen_md": meta["origen_md"],
             "informe": informe, "preambulo": preambulo, "segmentos": segmentos, "retiros": retiros,
-            "docx": {"permitido": permitido, "causa": causa}}
+            "transcripciones": transcripciones, "docx": {"permitido": permitido, "causa": causa}}
 
 
 # ───────────────────────── validación de entradas ─────────────────────────
@@ -325,6 +330,63 @@ def imagen_pagina(carpeta: Path, archivo: str) -> bytes:
     return buffer.getvalue()
 
 
+# ───────────────────────── transcripción asistida (Claude visión, NO verificada) ─────────────────────────
+# trabajo/<id>/transcripciones/<n>.json. Nunca entra al .md ni cambia el veredicto del gate.
+
+def leer_transcripciones(carpeta: Path) -> dict:
+    destino = carpeta / "transcripciones"
+    if not destino.is_dir():
+        return {}
+    return {ruta.stem: leer_json(ruta) for ruta in sorted(destino.glob("*.json"), key=lambda r: int(r.stem))}
+
+
+def imagen_para_transcribir(carpeta: Path, n: int) -> bytes:
+    """La página entera como PNG, con su lado mayor a transcripcion.LADO_MAYOR_PX (letra pequeña legible)."""
+    with CANDADO:
+        pdf = pdfium.PdfDocument(str(carpeta / "original.pdf"))
+        try:
+            if not 1 <= n <= len(pdf):
+                raise ErrorBanco(404, f"El PDF no tiene página {n}")
+            pagina = pdf[n - 1]
+            try:
+                escala = transcripcion.LADO_MAYOR_PX / max(pagina.get_width(), pagina.get_height())
+                buffer = io.BytesIO()
+                pagina.render(scale=escala).to_pil().save(buffer, format="PNG")
+            finally:
+                pagina.close()
+        finally:
+            pdf.close()
+    return buffer.getvalue()
+
+
+def transcribir_pagina(carpeta: Path, texto_n: str, cuerpo: bytes) -> dict:
+    disponible, causa = estado_tokens()
+    if not disponible:
+        raise ErrorBanco(412, causa)  # se rechaza antes de tocar la red
+    if not texto_n.isdigit():
+        raise ErrorBanco(400, "Página inválida: se espera un número")
+    datos = json_de(cuerpo)
+    if datos.get("confirmado") is not True:
+        raise ErrorBanco(400, "Falta confirmar que la página se enviará a la API de Anthropic y que tiene costo")
+    modelo = datos.get("modelo") or transcripcion.MODELO_DEFECTO
+    if not isinstance(modelo, str) or not RE_MODELO.fullmatch(modelo):
+        raise ErrorBanco(400, "Nombre de modelo inválido")
+    n = int(texto_n)
+    paginas = leer_json(carpeta / "informe.json")["paginas"]
+    png = imagen_para_transcribir(carpeta, n)
+    clave = os.environ["ANTHROPIC_API_KEY"]
+    try:
+        resultado = transcripcion.transcribir(base64.standard_b64encode(png).decode("ascii"), n, paginas, modelo, clave)
+    except transcripcion.ErrorTranscripcion as e:
+        raise ErrorBanco(e.codigo, ocultar(e.mensaje, clave)) from None
+    registro = {"pagina": n, "fecha_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+                "sha256_imagen": hashlib.sha256(png).hexdigest(), **resultado}
+    destino = carpeta / "transcripciones"
+    destino.mkdir(exist_ok=True)
+    escribir_json(destino / f"{n}.json", registro)
+    return registro
+
+
 # ───────────────────────── .docx de lectura humana ─────────────────────────
 
 def para_docx(texto: str) -> str:
@@ -356,13 +418,19 @@ def agregar_lineas(doc, texto: str) -> None:
             doc.add_paragraph(linea.rstrip())
 
 
-def construir_docx(informe: dict, nombre_pdf: str, preambulo: str, segmentos: list) -> bytes:
+def construir_docx(informe: dict, nombre_pdf: str, preambulo: str, segmentos: list,
+                   transcripciones: dict = None) -> bytes:
+    transcripciones = transcripciones or {}
     doc = Document()
     marca = doc.styles.add_style(ESTILO_MARCA, WD_STYLE_TYPE.PARAGRAPH)
     marca.base_style = doc.styles["Normal"]
     marca.font.bold = True
     marca.font.size = Pt(9)
     marca.font.color.rgb = RGBColor(0x66, 0x66, 0x66)
+    asistida = doc.styles.add_style(ESTILO_TRANSCRIPCION, WD_STYLE_TYPE.PARAGRAPH)
+    asistida.base_style = doc.styles["Normal"]
+    asistida.font.italic = True
+    asistida.font.color.rgb = RGBColor(0x8A, 0x5D, 0x00)
 
     sha = informe["sha256_pdf"]
     propiedades = doc.core_properties
@@ -395,6 +463,13 @@ def construir_docx(informe: dict, nombre_pdf: str, preambulo: str, segmentos: li
         if n in giradas:
             doc.add_paragraph().add_run(f"Página girada {giradas[n]}° en el original.").italic = True
         agregar_lineas(doc, "".join(por_pagina.get(n, [])))
+        t = transcripciones.get(str(n))
+        if t and t.get("texto"):
+            doc.add_paragraph(f"Transcripción asistida por IA ({t['modelo_respuesta']}) del texto en imágenes — "
+                              "NO VERIFICADA contra el PDF:", style=ESTILO_TRANSCRIPCION).runs[0].bold = True
+            for linea in para_docx(t["texto"]).splitlines():
+                if linea.strip():
+                    doc.add_paragraph(linea.rstrip(), style=ESTILO_TRANSCRIPCION)
 
     buffer = io.BytesIO()
     doc.save(buffer)
@@ -406,10 +481,11 @@ def exportar_docx(carpeta: Path):
         informe = guardar_y_verificar(carpeta)  # veredicto fresco del gate sobre el .md guardado
         preambulo, segmentos = segmentos_md(leer_md(carpeta))
         meta = leer_json(carpeta / "meta.json")
+        transcripciones = leer_transcripciones(carpeta)
     permitido, causa = politica_docx(informe, segmentos)
     if not permitido:
         raise ErrorBanco(409, causa)
-    datos = construir_docx(informe, meta["nombre_pdf"], preambulo, segmentos)
+    datos = construir_docx(informe, meta["nombre_pdf"], preambulo, segmentos, transcripciones)
     return datos, nombre_descarga(meta["nombre_pdf"], ".docx")
 
 
@@ -492,6 +568,8 @@ def configuracion() -> dict:
     return {"version_gate": f"{refuerzo.VERSION} · kit {gate.VERSION}", "convertidores": list(CONVERTIDORES),
             "tokens": {"disponible": disponible, "causa": causa,
                        "modelo_defecto": medir_tokens.MODELO_DEFECTO},
+            "transcripcion": {"disponible": disponible, "causa": causa,
+                              "modelo_defecto": transcripcion.MODELO_DEFECTO, "esfuerzo": transcripcion.ESFUERZO},
             "tope_pdf_mb": TOPE_PDF // 2 ** 20, "tope_md_mb": TOPE_TEXTO // 2 ** 20}
 
 
@@ -576,6 +654,8 @@ class Manejador(BaseHTTPRequestHandler):
                 return self.responder_json(200, subir_md_externo(carpeta, self.leer_cuerpo(TOPE_TEXTO), consulta))
             if metodo == "POST" and accion == ["tokens"]:
                 return self.responder_json(200, medir(carpeta, self.leer_cuerpo(TOPE_TEXTO)))
+            if metodo == "POST" and len(accion) == 2 and accion[0] == "transcribir":
+                return self.responder_json(200, transcribir_pagina(carpeta, accion[1], self.leer_cuerpo(TOPE_TEXTO)))
         raise ErrorBanco(404, "Ruta inexistente")
 
     def leer_cuerpo(self, tope: int) -> bytes:

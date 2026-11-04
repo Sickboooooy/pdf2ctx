@@ -116,6 +116,11 @@
   .metricas { font: .78rem var(--f-mono); color: var(--acero); overflow-wrap: anywhere; }
   .metricas div + div { margin-top: 4px; }
   .solo-problemas .pagina.v-verde { display: none; }
+  [id^="tr-"] { margin-top: 14px; }
+  .transcripcion { padding: 12px 14px; border: 1px dashed var(--ambar); border-radius: 10px; background: var(--ambar-suave); }
+  .transcripcion pre { margin: 10px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font: .8rem/1.5 var(--f-mono);
+                       color: var(--papel); }
+  .transcripcion .metricas { margin-top: 8px; }
 
   .pie { border-top: 1px solid var(--linea); margin-top: 32px; padding-top: 18px; font: .74rem var(--f-mono);
          letter-spacing: .06em; text-transform: uppercase; color: var(--acero); display: flex; gap: 16px; flex-wrap: wrap; }
@@ -182,6 +187,10 @@
         <span class="causa" id="causa-tokens"></span>
       </div>
       <div id="resultado-tokens" class="metricas"></div>
+      <div class="fila">
+        <button id="btn-transcribir">Transcribir imágenes con Claude</button>
+        <span class="causa" id="causa-transcribir"></span>
+      </div>
     </div>
 
     <div class="tarjeta fila">
@@ -416,6 +425,69 @@ function pintarAcciones() {
   $("causa-tokens").textContent = config.tokens.disponible
     ? "Pide confirmación antes de enviar el PDF a la API de Anthropic."
     : config.tokens.causa;
+  const pendientes = paginasPendientes();
+  $("btn-transcribir").disabled = !config.transcripcion.disponible || !pendientes.length;
+  $("btn-transcribir").textContent = "Transcribir imágenes con Claude (" + pendientes.length + " págs.)";
+  $("causa-transcribir").textContent = !config.transcripcion.disponible ? config.transcripcion.causa
+    : pendientes.length ? "Solo páginas marcadas por imágenes. Texto NO verificado; pide confirmación; tiene costo."
+    : "No hay páginas marcadas pendientes de transcribir.";
+}
+
+// ───────── transcripción asistida (Claude visión): capa aparte, NO verificada ─────────
+
+// Páginas que el gate marcó porque su contenido está en imágenes (sin capa de texto, OCR previo o R8).
+function esMarcada(d) {
+  return d.veredicto === "🟡" && (d.clase !== "texto" || d.hallazgos.some((h) => h.startsWith("R8")));
+}
+
+function paginasPendientes() {
+  const hechas = vista.transcripciones || {};
+  return vista.informe.detalle.filter((d) => esMarcada(d) && !hechas[String(d.pagina)]).map((d) => d.pagina);
+}
+
+function cajaTranscripcion(n, d) {
+  const caja = el("div", { id: "tr-" + n });
+  const t = (vista.transcripciones || {})[String(n)];
+  if (t) {
+    caja.append(el("div", { clase: "transcripcion" },
+      el("span", { clase: "chip v-ambar" }, "Transcripción asistida · no verificada"),
+      el("div", { clase: "metricas" }, t.modelo_respuesta + (t.fallback ? " (fallback)" : "") +
+        " · entrada " + t.uso.input_tokens + " · salida " + t.uso.output_tokens + " tokens" +
+        (t.truncada ? " · TRUNCADA" : "") + (t.request_id ? " · " + t.request_id : "")),
+      el("pre", {}, t.texto || "(sin texto)")));
+  } else if (esMarcada(d) && config.transcripcion.disponible) {
+    const boton = el("button", {}, "Transcribir esta página con Claude");
+    boton.addEventListener("click", () => transcribir([n]));
+    caja.append(boton);
+  }
+  return caja;
+}
+
+function transcribir(paginas) {
+  if (!paginas.length) { avisar("No hay páginas marcadas sin transcribir.", false); return; }
+  const modelo = config.transcripcion.modelo_defecto;
+  const aceptar = window.confirm(
+    "⚠️ Transcribir con Claude ENVÍA " + paginas.length + " página(s) como imagen a la API de Anthropic (" +
+    modelo + "). Tiene COSTO real según los tokens que reporte la API.\n\n" +
+    "El texto resultante NO queda verificado contra el PDF: no entra al .md ni cambia el veredicto.\n\n" +
+    "¿Enviar páginas de «" + vista.nombre_pdf + "»?");
+  if (!aceptar) { avisar("Transcripción cancelada: no se envió nada.", false); return; }
+  tarea("Transcribiendo…", async () => {
+    let entrada = 0, salida = 0, hechas = 0;
+    for (const n of paginas) {
+      avisar("Transcribiendo p. " + n + " (" + (hechas + 1) + " de " + paginas.length + ")…", false);
+      const t = await pedirJson("POST", "/api/doc/" + vista.id + "/transcribir/" + n,
+                                JSON.stringify({ confirmado: true, modelo: modelo }), "application/json");
+      vista.transcripciones = vista.transcripciones || {};
+      vista.transcripciones[String(n)] = t;
+      entrada += t.uso.input_tokens; salida += t.uso.output_tokens; hechas += 1;
+      const anterior = $("tr-" + n);
+      if (anterior) anterior.replaceWith(cajaTranscripcion(n, vista.informe.detalle.find((x) => x.pagina === n)));
+    }
+    pintarAcciones();
+    avisar("Transcritas " + hechas + " página(s) · entrada " + entrada + " · salida " + salida +
+           " tokens (uso real reportado por la API). Texto NO verificado.", false);
+  });
 }
 
 function pintarTokens(d) {
@@ -487,7 +559,8 @@ function pintarPaginas() {
         el("div", { clase: "fila" }, chipEstado(d.veredicto, "p. " + n + " · " + (NOMBRE[d.veredicto] || "")),
            el("span", { clase: "tenue mono" }, d.clase)),
         lista(d.hallazgos, "hallazgos"),
-        metricas(d.metricas || {}, d))));
+        metricas(d.metricas || {}, d),
+        cajaTranscripcion(n, d))));
   }
   $("paginas").replaceChildren(...paginas);
 
@@ -527,6 +600,7 @@ async function iniciar() {
   $("btn-informe").addEventListener("click", () => descargar("informe"));
   $("btn-docx").addEventListener("click", () => descargar("docx"));
   $("btn-tokens").addEventListener("click", medirTokens);
+  $("btn-transcribir").addEventListener("click", () => transcribir(paginasPendientes()));
   $("solo-problemas").addEventListener("change", (e) => {
     $("paginas").classList.toggle("solo-problemas", e.target.checked);
   });

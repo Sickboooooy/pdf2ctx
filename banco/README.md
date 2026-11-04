@@ -24,7 +24,7 @@ vía `sys.path`; nunca se copia ni se edita.
 ```bash
 cd pdf2ctx
 python3 -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt "python-docx>=1.1,<2" "Pillow>=11"
+.venv/bin/python -m pip install -r requirements.txt "python-docx>=1.1,<2" "Pillow>=11" "anthropic>=1,<2"
 
 .venv/bin/python banco/servidor_local.py              # → http://127.0.0.1:8787/
 .venv/bin/python banco/servidor_local.py --puerto 9000
@@ -66,8 +66,27 @@ entorno del proceso del servidor.
 así, cada medición **envía el PDF a Anthropic**: úsalo solo con documentos públicos. La UI pide confirmación antes
 de cada envío, y el servidor exige `confirmado: true`.
 
-Dependencias nuevas: python-docx 1.2.0 (MIT, trae lxml BSD-3 y typing_extensions PSF) y Pillow 13.0.0
-(MIT-CMU). Nada GPL ni AGPL.
+### Transcripción asistida con Claude (visión) · NO verificada
+
+Las páginas que el gate marca porque su contenido está en imágenes (sin capa de texto, capa OCR previa o R8) se
+pueden mandar a Claude para leer ese texto. Lo hace `banco/transcripcion.py` con el SDK oficial `anthropic` (MIT):
+
+- **Capa aparte**: la transcripción nunca entra al `.md` verificado ni cambia el veredicto. En la UI aparece junto a
+  la imagen como «Transcripción asistida · no verificada», y en el `.docx` con la etiqueta «NO VERIFICADA».
+- **Modelo** `claude-sonnet-5-5`, esfuerzo `low`, página entera renderizada con su lado mayor a 1568 px. El
+  fallback del servidor está activado (`fallbacks: "default"`): si el modelo declina, la API reintenta con otro
+  dentro de la misma llamada y queda registrado qué modelo respondió.
+- **El texto de la imagen es un dato**: si trae instrucciones, se transcriben, no se obedecen. Lo ilegible se
+  marca como `[ilegible]`; las cifras nunca se adivinan.
+- **Cuesta dinero real** (API de mensajes, no `count_tokens`) y **envía las imágenes a Anthropic**: la UI pide una
+  confirmación por lote, y el servidor exige `confirmado: true` en cada página.
+- **Evidencia**: `trabajo/<id>/transcripciones/<n>.json`, con texto, modelo, `request_id`, uso real de tokens
+  (entrada y salida), fecha y SHA-256 de la imagen enviada.
+
+Requiere la llave (`--llavero`) y la dependencia: `.venv/bin/python -m pip install "anthropic>=1,<2"`.
+
+Dependencias nuevas: python-docx 1.2.0 (MIT, trae lxml BSD-3 y typing_extensions PSF), Pillow 13.0.0
+(MIT-CMU) y anthropic 1.17.0 (MIT; su árbol completo es MIT, BSD-3, Apache-2.0 o PSF). Nada GPL ni AGPL.
 
 ## Qué hace
 

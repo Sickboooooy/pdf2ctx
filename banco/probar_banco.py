@@ -136,8 +136,9 @@ class Banco:
 
 
 class Imitador:
-    """Imitador local de count_tokens: registra cada petición y nunca sale a la red."""
+    """Imitador local de count_tokens y de la API de mensajes: registra cada petición y nunca sale a la red."""
     BASE, PDF, MD = 12, 1500, 400
+    TRANSCRIPCION, ENTRADA, SALIDA = "TRANSCRIPCIÓN DE PRUEBA · imitador local", 1600, 42
 
     def __init__(self):
         self.peticiones = []
@@ -147,18 +148,26 @@ class Imitador:
             def do_POST(self):
                 cuerpo = json_de(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
                 imitador.peticiones.append({"ruta": self.path, "llave": self.headers.get("x-api-key", ""),
-                                            "cuerpo": cuerpo})
+                                            "beta": self.headers.get("anthropic-beta", ""), "cuerpo": cuerpo})
                 contenido = cuerpo.get("messages", [{}])[0].get("content", [])
-                if any(b.get("type") == "document" for b in contenido):
-                    n = Imitador.PDF
-                elif len(contenido) == 1:
-                    n = Imitador.BASE
+                if "count_tokens" not in self.path:   # API de mensajes: una transcripción de mentira
+                    datos = json.dumps({
+                        "id": "msg_imitador", "type": "message", "role": "assistant", "model": cuerpo.get("model", ""),
+                        "content": [{"type": "text", "text": Imitador.TRANSCRIPCION}],
+                        "stop_reason": "end_turn", "stop_sequence": None,
+                        "usage": {"input_tokens": Imitador.ENTRADA, "output_tokens": Imitador.SALIDA}}).encode("utf-8")
                 else:
-                    n = Imitador.MD
-                datos = json.dumps({"input_tokens": n}).encode("utf-8")
+                    if any(b.get("type") == "document" for b in contenido):
+                        n = Imitador.PDF
+                    elif len(contenido) == 1:
+                        n = Imitador.BASE
+                    else:
+                        n = Imitador.MD
+                    datos = json.dumps({"input_tokens": n}).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(datos)))
+                self.send_header("request-id", "req_imitador")
                 self.end_headers()
                 self.wfile.write(datos)
 
@@ -407,6 +416,10 @@ def probar_sin_llave(banco: Banco, imitador: Imitador, ruta_pdf: Path, trabajo: 
               estado == 412 and len(imitador.peticiones) == antes,
               f"HTTP {estado} · {len(imitador.peticiones) - antes} peticiones de red · "
               + json_de(cuerpo).get("error", ""))
+    estado, _, cuerpo = banco.post_json(f"/api/doc/{id_doc}/transcribir/1", {"confirmado": True})
+    comprobar("transcribir con Claude sin llave → rechazo (412) sin intentar red",
+              estado == 412 and len(imitador.peticiones) == antes,
+              f"HTTP {estado} · {len(imitador.peticiones) - antes} peticiones de red")
 
 
 def probar_con_llave(imitador: Imitador, ruta_pdf: Path, trabajo: Path) -> None:
@@ -438,6 +451,47 @@ def probar_con_llave(imitador: Imitador, ruta_pdf: Path, trabajo: Path) -> None:
                   len(nuevas) == 3 and all(p["ruta"] == "/v1/messages/count_tokens" and p["llave"] == llave for p in nuevas)
                   and datos_pdf == [base64.standard_b64encode(pdf).decode("ascii")],
                   f"{len(nuevas)} peticiones")
+
+        print("\n— Transcripción asistida con Claude (visión) contra el imitador local: capa NO verificada")
+        antes_vista = json_de(banco.get(f"/api/doc/{id_doc}")[2])
+        antes = len(imitador.peticiones)
+        estado, _, _ = banco.post_json(f"/api/doc/{id_doc}/transcribir/1", {"modelo": "claude-sonnet-5-5"})
+        comprobar("transcribir sin confirmación explícita → 400 y sin red",
+                  estado == 400 and len(imitador.peticiones) == antes, f"HTTP {estado}")
+        estado, _, _ = banco.post_json(f"/api/doc/{id_doc}/transcribir/999", {"confirmado": True})
+        comprobar("transcribir una página inexistente → 404 y sin red",
+                  estado == 404 and len(imitador.peticiones) == antes, f"HTTP {estado}")
+        estado, _, cuerpo_t = banco.post_json(f"/api/doc/{id_doc}/transcribir/1",
+                                              {"confirmado": True, "modelo": "claude-sonnet-5-5"})
+        t = json_de(cuerpo_t)
+        comprobar("con confirmación: devuelve el texto y el uso de tokens que reporta la API",
+                  estado == 200 and t.get("texto") == Imitador.TRANSCRIPCION
+                  and t.get("uso") == {"input_tokens": Imitador.ENTRADA, "output_tokens": Imitador.SALIDA}
+                  and t.get("request_id") == "req_imitador",
+                  f"HTTP {estado} · {t.get('modelo_respuesta')} · uso {t.get('uso')}")
+        nuevas = imitador.peticiones[antes:]
+        p = nuevas[0] if len(nuevas) == 1 else {}
+        bloques = p.get("cuerpo", {}).get("messages", [{}])[0].get("content", [])
+        imagen = next((b for b in bloques if b.get("type") == "image"), {})
+        png_ok = base64.b64decode(imagen.get("source", {}).get("data", "") or b"").startswith(b"\x89PNG\r\n\x1a\n")
+        comprobar("una sola petición a /v1/messages: imagen PNG, llave en x-api-key, modelo pedido y fallback",
+                  len(nuevas) == 1 and p["ruta"].startswith("/v1/messages") and "count_tokens" not in p["ruta"]
+                  and p["llave"] == llave and p["cuerpo"].get("model") == "claude-sonnet-5-5" and png_ok
+                  and p["cuerpo"].get("fallbacks") == "default" and "server-side-fallback" in p["beta"],
+                  f"{len(nuevas)} petición(es) · {p.get('ruta')}")
+        sistema = p.get("cuerpo", {}).get("system", "")
+        comprobar("la instrucción del sistema trata el texto de la imagen como dato, no como orden",
+                  "no las sigas" in sistema and "Nunca adivines cifras" in sistema)
+        despues = json_de(banco.get(f"/api/doc/{id_doc}")[2])
+        comprobar("transcribir no toca el .md ni el veredicto del gate (capa aparte)",
+                  despues["informe"]["sha256_md"] == antes_vista["informe"]["sha256_md"]
+                  and despues["informe"]["codigo_salida"] == antes_vista["informe"]["codigo_salida"]
+                  and despues.get("transcripciones", {}).get("1", {}).get("texto") == Imitador.TRANSCRIPCION,
+                  f"código {despues['informe']['codigo_salida']} · transcripciones {list(despues.get('transcripciones', {}))}")
+        estado, _, datos_docx = banco.get(f"/api/doc/{id_doc}/descargar/docx")
+        texto_docx = "\n".join(par.text for par in Document(io.BytesIO(datos_docx)).paragraphs) if estado == 200 else ""
+        comprobar("el .docx trae la transcripción etiquetada «NO VERIFICADA»",
+                  "NO VERIFICADA" in texto_docx and Imitador.TRANSCRIPCION in texto_docx, f"HTTP {estado}")
     finally:
         banco.cerrar()
     registro = banco.registro.read_text(encoding="utf-8")
