@@ -4,89 +4,150 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="token-banco" content="__TOKEN_BANCO__">
-<title>pdf2ctx · banco</title>
+<meta name="theme-color" content="#050B14">
+<title>itosturre · pdf2ctx banco</title>
 <style>
+  /* Sistema visual de itosturre.com: tinta/noche, papel, acero, cian y los tres estados.
+     Sin recursos externos: las tipografías de la marca se usan si están instaladas; si no, sus respaldos. */
   :root {
-    --fondo: #f5f5f2; --tarjeta: #ffffff; --texto: #1d1d1b; --tenue: #6b6b66; --borde: #d9d9d3;
-    --acento: #2b4c7e; --verde: #1f7a3d; --amarillo: #8a5d00; --rojo: #b3261e;
-    --fondo-verde: #e6f3ea; --fondo-amarillo: #faf0d6; --fondo-rojo: #fae3e1;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --fondo: #151514; --tarjeta: #1f1f1d; --texto: #ececea; --tenue: #a3a39d; --borde: #3a3a36;
-      --acento: #8fb0e6; --verde: #6fcf8e; --amarillo: #e8b84a; --rojo: #ff8a80;
-      --fondo-verde: #17301e; --fondo-amarillo: #33290f; --fondo-rojo: #3a1a18;
-    }
+    --tinta: #050B14; --noche: #0A1626; --noche-2: #0F2036;
+    --linea: rgba(143, 163, 184, .18); --linea-fuerte: rgba(143, 163, 184, .32);
+    --papel: #E8EEF4; --acero: #8FA3B8; --cian: #3CC8F0; --cian-2: #1E9BD7;
+    --verde: #3DD68C; --ambar: #E8B33A; --lacre: #E5533D;
+    --cian-suave: rgba(60, 200, 240, .10); --cian-borde: rgba(60, 200, 240, .38);
+    --verde-suave: rgba(61, 214, 140, .12); --ambar-suave: rgba(232, 179, 58, .12); --lacre-suave: rgba(229, 83, 61, .12);
+    --f-display: "Gloock", Georgia, "Times New Roman", serif;
+    --f-cuerpo: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --f-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+    --radio: 14px;
+    --margen: clamp(16px, 4vw, 40px);
   }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--fondo); color: var(--texto);
-         font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-  header { padding: 12px 16px; border-bottom: 1px solid var(--borde); display: flex; gap: 12px;
-           align-items: baseline; flex-wrap: wrap; }
-  h1 { font-size: 18px; margin: 0; }
-  h2 { font-size: 15px; margin: 0 0 10px; }
-  main { max-width: 1500px; margin: 0 auto; padding: 16px; }
-  .tarjeta { background: var(--tarjeta); border: 1px solid var(--borde); border-radius: 8px;
-             padding: 14px 16px; margin-bottom: 14px; }
-  .fila { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-  .fila + .fila { margin-top: 10px; }
-  button, select, input[type="text"] { font: inherit; padding: 6px 12px; border-radius: 6px;
-           border: 1px solid var(--borde); background: var(--tarjeta); color: var(--texto); }
-  button { cursor: pointer; }
-  button.primario { background: var(--acento); border-color: var(--acento); color: #fff; }
-  button:disabled { opacity: .45; cursor: not-allowed; }
-  .tenue { color: var(--tenue); }
-  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px;
-          word-break: break-all; }
-  #mensaje { min-height: 22px; margin: 0 0 12px; }
-  #mensaje.error { color: var(--rojo); font-weight: 600; }
-  .veredicto-grande { font-size: 22px; font-weight: 650; }
-  .rejilla { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px 18px;
-             margin-top: 12px; }
-  .dato { display: block; font-size: 12px; color: var(--tenue); }
-  .errores { color: var(--rojo); margin: 10px 0 0; padding-left: 20px; }
-  .avisos { color: var(--amarillo); margin: 8px 0 0; padding-left: 20px; }
-  .saltos a { color: var(--acento); margin-right: 8px; }
-  .sucio { color: var(--amarillo); font-weight: 600; }
-  .causa { font-size: 13px; color: var(--tenue); }
-  #resumen.v-verde { border-left: 6px solid var(--verde); }
-  #resumen.v-amarillo { border-left: 6px solid var(--amarillo); }
-  #resumen.v-rojo { border-left: 6px solid var(--rojo); }
-  .pagina { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, .8fr);
-            gap: 14px; border-left: 6px solid var(--borde); }
+  html { background: var(--tinta); }
+  body { margin: 0; background: var(--tinta); color: var(--papel); font: 15px/1.5 var(--f-cuerpo);
+         -webkit-font-smoothing: antialiased; }
+  ::selection { background: var(--cian); color: var(--tinta); }
+  :focus-visible { outline: 2px solid var(--cian); outline-offset: 2px; }
+
+  .cabecera { position: sticky; top: 0; z-index: 5; background: rgba(5, 11, 20, .88);
+              backdrop-filter: blur(10px); border-bottom: 1px solid var(--linea); }
+  .envoltura { max-width: 1440px; margin: 0 auto; padding: 0 var(--margen); }
+  .cabecera .envoltura { display: flex; align-items: center; gap: 18px; min-height: 64px; flex-wrap: wrap; }
+  .marca { display: inline-flex; align-items: center; gap: 10px; color: var(--papel); }
+  .marca svg { width: 28px; height: 28px; color: var(--cian); flex: none; }
+  .marca span { font-family: var(--f-display); font-size: 1.55rem; line-height: 1; letter-spacing: -.01em; }
+  .producto { font-family: var(--f-mono); font-size: .78rem; letter-spacing: .06em; text-transform: uppercase;
+              color: var(--acero); padding-left: 18px; border-left: 1px solid var(--linea-fuerte); }
+  .cabecera .derecha { margin-left: auto; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+
+  main { max-width: 1440px; margin: 0 auto; padding: 28px var(--margen) 48px; }
+  .portada { margin: 8px 0 26px; }
+  .portada h1 { font-family: var(--f-display); font-weight: 400; font-size: clamp(1.7rem, 3.4vw, 2.6rem);
+                line-height: 1.12; margin: 0 0 8px; letter-spacing: -.01em; }
+  .portada h1 em { color: var(--lacre); font-style: italic; }
+  .portada p { margin: 0; color: var(--acero); max-width: 70ch; }
+
+  .etiqueta-seccion { font-family: var(--f-mono); font-size: .74rem; letter-spacing: .08em; text-transform: uppercase;
+                      color: var(--cian); margin: 0 0 12px; }
+  .tarjeta { background: var(--noche); border: 1px solid var(--linea); border-radius: var(--radio);
+             padding: 20px 22px; margin-bottom: 16px; }
+  .fila { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .fila + .fila { margin-top: 14px; }
+  .tenue { color: var(--acero); }
+  .mono { font-family: var(--f-mono); font-size: .8rem; overflow-wrap: anywhere; }
+
+  .boton, button, input::file-selector-button {
+    display: inline-flex; align-items: center; justify-content: center; gap: .5em; font: 600 .92rem var(--f-cuerpo);
+    border-radius: 999px; padding: 10px 18px; border: 1px solid var(--linea-fuerte); cursor: pointer;
+    background: rgba(5, 11, 20, .35); color: var(--papel); transition: transform .15s ease, border-color .15s ease, background .15s ease; }
+  button:hover:not(:disabled), input::file-selector-button:hover { border-color: var(--cian); transform: translateY(-1px); }
+  button.primario { background: var(--cian); border-color: var(--cian); color: var(--tinta); }
+  button.primario:hover:not(:disabled) { background: var(--papel); border-color: var(--papel); }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  input[type="file"] { color: var(--acero); font: .88rem var(--f-cuerpo); max-width: 100%; }
+  input::file-selector-button { margin-right: 12px; }
+  select, input[type="text"] { font: .9rem var(--f-mono); color: var(--papel); background: var(--tinta);
+                               border: 1px solid var(--linea-fuerte); border-radius: 10px; padding: 9px 12px; }
+  label { color: var(--acero); font-size: .9rem; }
+
+  #mensaje { min-height: 24px; margin: 0 0 14px; font-family: var(--f-mono); font-size: .85rem; color: var(--acero); }
+  #mensaje.error { color: var(--lacre); }
+
+  .chip { display: inline-flex; align-items: center; gap: 8px; font: .72rem var(--f-mono); letter-spacing: .06em;
+          text-transform: uppercase; padding: 5px 11px; border-radius: 999px; border: 1px solid currentColor;
+          white-space: nowrap; color: var(--acero); text-decoration: none; }
+  .chip::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .chip.cian { color: var(--cian); background: var(--cian-suave); }
+  /* Cada chip lleva su propia clase de estado: no hereda el color de la tarjeta que lo contiene. */
+  .chip.v-verde { color: var(--verde); background: var(--verde-suave); }
+  .chip.v-ambar { color: var(--ambar); background: var(--ambar-suave); }
+  .chip.v-lacre { color: var(--lacre); background: var(--lacre-suave); }
+
+  #resumen { border-left: 4px solid var(--linea-fuerte); }
+  #resumen.v-verde { border-left-color: var(--verde); }
+  #resumen.v-ambar { border-left-color: var(--ambar); }
+  #resumen.v-lacre { border-left-color: var(--lacre); }
+  .veredicto { font-family: var(--f-display); font-size: clamp(1.6rem, 3vw, 2.3rem); line-height: 1.1; }
+  .v-verde .veredicto { color: var(--verde); } .v-ambar .veredicto { color: var(--ambar); } .v-lacre .veredicto { color: var(--lacre); }
+  .rejilla { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px 24px; margin-top: 18px; }
+  .dato { display: block; font: .7rem var(--f-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--acero);
+          margin-bottom: 3px; }
+  .lista { margin: 14px 0 0; padding-left: 18px; }
+  .lista li { margin-bottom: 6px; overflow-wrap: anywhere; }
+  .lista.errores { color: var(--lacre); } .lista.avisos { color: var(--ambar); }
+  .saltos { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 16px; }
+  .sucio { color: var(--ambar); font-size: .88rem; }
+  .causa { font-size: .85rem; color: var(--acero); }
+
+  .pagina { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, .85fr); gap: 18px;
+            border-left: 4px solid var(--linea-fuerte); }
   .pagina.v-verde { border-left-color: var(--verde); }
-  .pagina.v-amarillo { border-left-color: var(--amarillo); }
-  .pagina.v-rojo { border-left-color: var(--rojo); }
-  /* aspect-ratio reserva el alto de una hoja carta mientras la imagen no carga (lazy loading real);
-     al cargar manda la proporción verdadera de la página. */
-  .pagina img { width: 100%; height: auto; aspect-ratio: auto 8.5 / 11; border: 1px solid var(--borde);
-                background: #fff; }
-  textarea { width: 100%; min-height: 420px; resize: vertical; padding: 8px; border-radius: 6px;
-             border: 1px solid var(--borde); background: var(--fondo); color: var(--texto);
-             font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; }
-  textarea.editado { outline: 2px solid var(--amarillo); }
-  .cabecera-ancla { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px;
-                    color: var(--tenue); margin-bottom: 4px; }
-  .etiqueta { display: inline-block; padding: 2px 8px; border-radius: 4px; font-weight: 650; }
-  .v-verde .etiqueta { background: var(--fondo-verde); color: var(--verde); }
-  .v-amarillo .etiqueta { background: var(--fondo-amarillo); color: var(--amarillo); }
-  .v-rojo .etiqueta { background: var(--fondo-rojo); color: var(--rojo); }
-  .hallazgos { padding-left: 18px; margin: 10px 0; }
-  .hallazgos li { margin-bottom: 6px; overflow-wrap: anywhere; }
-  .metricas { font-size: 13px; overflow-wrap: anywhere; }
+  .pagina.v-ambar { border-left-color: var(--ambar); }
+  .pagina.v-lacre { border-left-color: var(--lacre); }
+  .pagina img { width: 100%; height: auto; aspect-ratio: auto 8.5 / 11; display: block; border-radius: 6px;
+                background: #fff; box-shadow: 0 0 0 1px var(--linea); }
+  textarea { width: 100%; min-height: 440px; resize: vertical; padding: 12px; border-radius: 10px;
+             border: 1px solid var(--linea); background: var(--tinta); color: var(--papel);
+             font: .8rem/1.55 var(--f-mono); }
+  textarea.editado { border-color: var(--ambar); box-shadow: 0 0 0 1px var(--ambar); }
+  .cabecera-ancla { font: .78rem var(--f-mono); color: var(--cian); margin-bottom: 6px; }
+  .hallazgos { padding-left: 18px; margin: 14px 0; font-size: .9rem; }
+  .hallazgos li { margin-bottom: 8px; overflow-wrap: anywhere; }
+  .metricas { font: .78rem var(--f-mono); color: var(--acero); overflow-wrap: anywhere; }
+  .metricas div + div { margin-top: 4px; }
   .solo-problemas .pagina.v-verde { display: none; }
-  @media (max-width: 900px) { .pagina { grid-template-columns: minmax(0, 1fr); } }
+
+  .pie { border-top: 1px solid var(--linea); margin-top: 32px; padding-top: 18px; font: .74rem var(--f-mono);
+         letter-spacing: .06em; text-transform: uppercase; color: var(--acero); display: flex; gap: 16px; flex-wrap: wrap; }
+  @media (max-width: 900px) {
+    .pagina { grid-template-columns: minmax(0, 1fr); }
+    .producto { border-left: 0; padding-left: 0; }
+  }
 </style>
 </head>
 <body>
-<header>
-  <h1>pdf2ctx · banco de pruebas</h1>
-  <span class="tenue" id="version"></span>
-  <span class="tenue">· local, solo 127.0.0.1</span>
+<header class="cabecera">
+  <div class="envoltura">
+    <span class="marca" aria-label="itosturre">
+      <svg viewBox="0 0 28 28" aria-hidden="true"><circle cx="14" cy="14" r="12.2" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="14" cy="14" r="8.4" fill="none" stroke="currentColor" stroke-width=".9" stroke-dasharray="1.3 1.7"/><path d="M9.7 14.3l3 3 5.7-6.5" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span>itosturre</span>
+    </span>
+    <span class="producto">pdf2ctx · banco de pruebas</span>
+    <div class="derecha">
+      <span class="chip cian">local · 127.0.0.1</span>
+      <span class="chip" id="version">gate</span>
+    </div>
+  </div>
 </header>
+
 <main>
+  <section class="portada">
+    <h1>Si el .md no se valida contra el PDF, <em>no pasa.</em></h1>
+    <p>PDF → .md con anclas [[p. N]] → .docx de lectura. Cada veredicto lo da el gate; esta página solo lo muestra.</p>
+  </section>
+
   <section class="tarjeta">
-    <h2>Subir PDF</h2>
+    <p class="etiqueta-seccion">Paso 1 · PDF original</p>
     <div class="fila">
       <input type="file" id="archivo-pdf" accept="application/pdf,.pdf">
       <label>Convertidor <select id="convertidor"></select></label>
@@ -100,13 +161,14 @@
     <div class="tarjeta" id="resumen"></div>
 
     <div class="tarjeta">
+      <p class="etiqueta-seccion">Paso 2 · Verificar y exportar</p>
       <div class="fila">
         <button id="btn-reverificar">Re-verificar el .md</button>
-        <span class="sucio" id="sucio" hidden>⚠ Hay cambios sin verificar: el veredicto mostrado es el
-          anterior y las descargas usan el último .md verificado.</span>
+        <span class="sucio" id="sucio" hidden>⚠ Hay cambios sin verificar: el veredicto mostrado es el anterior y
+          las descargas usan el último .md verificado.</span>
       </div>
       <div class="fila">
-        <label>Subir .md externo (Docling u otro) <input type="file" id="archivo-md" accept=".md,text/markdown,text/plain"></label>
+        <label>.md externo (Docling u otro) <input type="file" id="archivo-md" accept=".md,text/markdown,text/plain"></label>
       </div>
       <div class="fila">
         <button id="btn-md">Descargar .md</button>
@@ -116,29 +178,35 @@
       </div>
       <div class="fila">
         <button id="btn-tokens">Medir tokens</button>
-        <label>Modelo <input type="text" id="modelo" size="22" spellcheck="false"></label>
+        <label>Modelo <input type="text" id="modelo" size="20" spellcheck="false"></label>
         <span class="causa" id="causa-tokens"></span>
       </div>
       <div id="resultado-tokens" class="metricas"></div>
     </div>
 
-    <div class="fila tarjeta">
-      <label><input type="checkbox" id="solo-problemas"> Mostrar solo páginas que no son 🟢</label>
+    <div class="tarjeta fila">
+      <label><input type="checkbox" id="solo-problemas"> Mostrar solo páginas que no están verificadas</label>
     </div>
     <div id="preambulo"></div>
     <div id="paginas"></div>
     <div id="extras"></div>
   </section>
+
+  <footer class="pie">
+    <span>itosturre</span><span>Legaltech forense · Guadalajara, México</span><span>pdf2ctx</span>
+  </footer>
 </main>
 
 <script nonce="__NONCE__">
 "use strict";
-// La UI solo pinta lo que devuelve el servidor. El veredicto y su código salen de
-// gate_fidelidad.verificar(); aquí no se calcula ninguno.
+// La UI solo pinta lo que devuelve el servidor. El veredicto y su código salen del gate
+// (gate_reforzado.verificar, que corre el gate del kit); aquí no se calcula ninguno.
 
 const TOKEN = document.querySelector('meta[name="token-banco"]').content;
-const NOMBRE = { "🟢": "VERIFICADO", "🟡": "NO VERIFICABLE", "🔴": "PÉRDIDA O ALTERACIÓN" };
-const CLASE = { "🟢": "v-verde", "🟡": "v-amarillo", "🔴": "v-rojo" };
+const NOMBRE = { "🟢": "Verificado", "🟡": "Requiere confirmación", "🔴": "No pasa" };
+const CLASE = { "🟢": "v-verde", "🟡": "v-ambar", "🔴": "v-lacre" };
+const DESCRIPCION = { visible: "visible — sin texto oculto, sin giro (recomendado)",
+                      minimo: "mínimo — capa de texto tal cual (kit)" };
 
 let config = null;            // GET /api/config
 let vista = null;             // última respuesta del servidor para el documento abierto
@@ -161,6 +229,10 @@ function el(etiqueta, atributos, ...hijos) {
 // Como replaceChildren, pero omite los hijos null (si no, el navegador escribe "null").
 function reemplazar(nodo, ...hijos) {
   nodo.replaceChildren(...hijos.filter((h) => h !== null && h !== undefined));
+}
+
+function chipEstado(veredicto, texto) {
+  return el("span", { clase: "chip estado " + (CLASE[veredicto] || "") }, texto || NOMBRE[veredicto] || veredicto);
 }
 
 function avisar(texto, esError) {
@@ -290,7 +362,7 @@ function mostrar(datos) {
 }
 
 function dato(etiqueta, valor) {
-  return el("div", {}, el("span", { clase: "dato" }, etiqueta), String(valor));
+  return el("div", {}, el("span", { clase: "dato" }, etiqueta), valor instanceof Node ? valor : String(valor));
 }
 
 function lista(elementos, clase) {
@@ -304,29 +376,37 @@ function pintarResumen() {
   const clases = Object.entries(inf.clases_oraculo).map(([k, v]) => k + ": " + v).join(" · ");
   const residuo = inf.eficiencia.residuo_pct === null ? "—" : inf.eficiencia.residuo_pct + " %";
   const problemas = inf.detalle.filter((d) => d.veredicto !== "🟢");
-  const saltos = problemas.length
-    ? el("div", { clase: "saltos" }, el("span", { clase: "dato" }, "Páginas con hallazgos"),
-        ...problemas.slice(0, 300).map((d) => el("a", { href: "#p-" + d.pagina }, d.veredicto + " p. " + d.pagina)))
-    : null;
+  const kit = inf.kit
+    ? chipEstado(inf.kit.veredicto, (NOMBRE[inf.kit.veredicto] || "") + " · código " + inf.kit.codigo_salida)
+    : "—";
+  const retiros = (vista.retiros || []).map((x) => "p. " + x.pagina + " · «" + x.texto.slice(0, 90) +
+                                                   (x.texto.length > 90 ? "…" : "") + "» — " + x.motivo);
 
   $("resumen").className = "tarjeta " + (CLASE[inf.veredicto] || "");
   reemplazar($("resumen"),
+    el("p", { clase: "etiqueta-seccion" }, "Veredicto del gate"),
     el("div", { clase: "fila" },
-      el("span", { clase: "veredicto-grande" }, inf.veredicto + " " + (NOMBRE[inf.veredicto] || "")),
-      el("span", { clase: "tenue" }, "código " + inf.codigo_salida)),
+      el("span", { clase: "veredicto" }, NOMBRE[inf.veredicto] || inf.veredicto),
+      chipEstado(inf.veredicto, "código " + inf.codigo_salida)),
     el("div", { clase: "rejilla" },
       dato("Documento", vista.nombre_pdf),
       dato("Origen del .md", vista.origen_md),
       dato("Páginas", inf.paginas + " · " + r.verde + " 🟢 · " + r.amarillo + " 🟡 · " + r.rojo + " 🔴"),
+      dato("Gate del kit (antes de los refuerzos)", kit),
       dato("Clases de oráculo", clases),
       dato("Residuo G3 (líneas repetidas)", residuo),
       dato("Gate", inf.gate + " " + inf.version)),
     el("div", { clase: "rejilla" },
       el("div", {}, el("span", { clase: "dato" }, "sha256 del PDF"), el("span", { clase: "mono" }, inf.sha256_pdf)),
       el("div", {}, el("span", { clase: "dato" }, "sha256 del .md"), el("span", { clase: "mono" }, inf.sha256_md))),
-    lista(inf.errores_documento.map((e) => "🔴 " + e), "errores"),
-    lista(inf.avisos, "avisos"),
-    saltos);
+    lista(inf.errores_documento.map((e) => "🔴 " + e), "lista errores"),
+    lista(inf.avisos, "lista avisos"),
+    retiros.length ? el("div", {}, el("span", { clase: "dato", style: "margin-top:16px" },
+                                     "Retirado del .md y declarado (retiros.json)"), lista(retiros, "lista avisos")) : null,
+    problemas.length
+      ? el("div", { clase: "saltos" }, ...problemas.slice(0, 300).map((d) =>
+          el("a", { href: "#p-" + d.pagina, clase: "chip " + (CLASE[d.veredicto] || "") }, "p. " + d.pagina)))
+      : null);
 }
 
 function pintarAcciones() {
@@ -343,9 +423,8 @@ function pintarTokens(d) {
   reemplazar($("resultado-tokens"),
     el("div", {}, el("strong", {}, d.estado), " · " + d.modelo + " · " + d.paginas + " págs"),
     el("div", {}, "PDF nativo: " + d.tokens_pdf_nativo + " tokens · .md: " + d.tokens_md + " tokens" + ahorro),
-    d.nota ? el("div", { clase: "tenue" }, d.nota) : null,
-    el("div", { clase: "tenue" }, "Cifras de count_tokens (la API advierte que son estimaciones). " +
-                                   "Respuestas JSON en " + d.respuestas));
+    d.nota ? el("div", {}, d.nota) : null,
+    el("div", {}, "Cifras de count_tokens (la API advierte que son estimaciones). Respuestas JSON en " + d.respuestas));
 }
 
 function areaTexto(clave, texto, etiqueta) {
@@ -359,14 +438,16 @@ function areaTexto(clave, texto, etiqueta) {
   return area;
 }
 
-function metricas(m) {
+function metricas(m, d) {
   const filas = [];
+  if (d.veredicto_kit && d.veredicto_kit !== d.veredicto) filas.push("kit: " + d.veredicto_kit + " → refuerzo: " + d.veredicto);
+  if (d.rotacion) filas.push("girada " + d.rotacion + "° en el original (extraída sin giro)");
   if (m.cobertura_palabras !== undefined) filas.push("cobertura de palabras: " + m.cobertura_palabras);
   if (m.fraccion_retirada) filas.push("fracción retirada: " + m.fraccion_retirada);
   if (m.invariantes_por_cotejar && m.invariantes_por_cotejar.length) {
     filas.push("cifras por cotejar contra la imagen: " + m.invariantes_por_cotejar.join(", "));
   }
-  return filas.length ? el("div", { clase: "metricas tenue" }, ...filas.map((f) => el("div", {}, f))) : null;
+  return filas.length ? el("div", { clase: "metricas" }, ...filas.map((f) => el("div", {}, f))) : null;
 }
 
 function pintarPaginas() {
@@ -383,7 +464,7 @@ function pintarPaginas() {
     const titulo = vista.segmentos.length
       ? "Texto antes de [[p. 1]] (no atribuible a una página)"
       : "El .md no tiene anclas [[p. N]]: este es todo su texto";
-    $("preambulo").append(el("div", { clase: "tarjeta" }, el("h2", {}, titulo),
+    $("preambulo").append(el("div", { clase: "tarjeta" }, el("p", { clase: "etiqueta-seccion" }, titulo),
                              areaTexto("pre", vista.preambulo, titulo)));
   }
 
@@ -403,10 +484,10 @@ function pintarPaginas() {
                                 alt: "Página " + n + " del PDF original" })),
       columnaMd,
       el("div", {},
-        el("div", {}, el("span", { clase: "etiqueta" }, d.veredicto + " p. " + n), " ",
-           el("span", { clase: "tenue" }, d.clase)),
+        el("div", { clase: "fila" }, chipEstado(d.veredicto, "p. " + n + " · " + (NOMBRE[d.veredicto] || "")),
+           el("span", { clase: "tenue mono" }, d.clase)),
         lista(d.hallazgos, "hallazgos"),
-        metricas(d.metricas))));
+        metricas(d.metricas || {}, d))));
   }
   $("paginas").replaceChildren(...paginas);
 
@@ -415,7 +496,7 @@ function pintarPaginas() {
   vista.segmentos.forEach((s, i) => { if (s.ancla < 1 || s.ancla > inf.paginas) fuera.push(i); });
   if (fuera.length) {
     $("extras").append(el("div", { clase: "tarjeta" },
-      el("h2", {}, "Anclas que no existen en el original"),
+      el("p", { clase: "etiqueta-seccion" }, "Anclas que no existen en el original"),
       ...fuera.flatMap((i) => [el("div", { clase: "cabecera-ancla" }, vista.segmentos[i].cabecera),
                                areaTexto(i, vista.segmentos[i].cuerpo, vista.segmentos[i].cabecera)])));
   }
@@ -435,7 +516,9 @@ async function iniciar() {
     return;
   }
   $("version").textContent = "gate " + config.version_gate;
-  for (const nombre of config.convertidores) $("convertidor").append(el("option", { value: nombre }, nombre));
+  for (const nombre of config.convertidores) {
+    $("convertidor").append(el("option", { value: nombre }, DESCRIPCION[nombre] || nombre));
+  }
   $("modelo").value = config.tokens.modelo_defecto;
   $("btn-convertir").addEventListener("click", convertir);
   $("btn-reverificar").addEventListener("click", reverificar);

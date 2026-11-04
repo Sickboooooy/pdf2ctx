@@ -3,8 +3,9 @@
 """
 probar_defectos.py — Suite de PDFs defectuosos de pdf2ctx (fuzz + regresión)
 
-Pasa cada fixture por el sistema real (banco: convertidor «minimo» + gate_fidelidad + .docx),
-cada caso en un proceso hijo con tiempo límite, y lo compara contra su verdad de referencia.
+Pasa cada fixture por el sistema real (banco: convertidor por defecto «visible», o «minimo» donde el caso lo
+pide, + gate_reforzado, que corre el gate del kit, + .docx), cada caso en un proceso hijo con tiempo límite,
+y lo compara contra su verdad de referencia.
 
 Dos fidelidades, siempre por separado
   CAPA TEXTUAL  ¿el .md coincide con la capa de texto del PDF?  → lo que mide el gate (🟢 🟡 🔴)
@@ -48,6 +49,7 @@ import gate_fidelidad as gate  # noqa: E402
 import pypdfium2 as pdfium  # noqa: E402
 
 VERDE, AMARILLO, ROJO = gate.VERDE, gate.AMARILLO, gate.ROJO
+NIVEL = {VERDE: 0, AMARILLO: 1, ROJO: 2}
 TIEMPO_LIMITE = 120  # segundos por caso
 
 # ───────────────────────── vulnerabilidades conocidas ─────────────────────────
@@ -88,10 +90,21 @@ VULNERABILIDADES = {
 # Todas se previeron en el análisis previo a la suite, salvo las que la suite misma descubrió:
 HALLADAS_POR_LA_SUITE = {"V10": "corrida del 4-XI-2026 (F1_paginas_giradas)"}
 
-# Fuzz con V4: los únicos archivos dañados que el sistema acepta y certifica 🟢 sin aviso. Los demás se
-# rechazan (400) o salen 🟡. Los fixtures son reproducibles byte a byte, así que el conjunto es estable;
-# si otro caso empieza a salir 🟢, aparece como FALLA (regresión).
+# Fuzz donde V4 se manifestó antes del refuerzo: archivos dañados que el sistema aceptaba y certificaba 🟢.
 FUZZ_CON_V4 = {"fuzz_bytes_01", "fuzz_bytes_08", "fuzz_sin_cola", "fuzz_truncado_99"}
+
+# Vulnerabilidades corregidas por gate_reforzado.py (rama feat/pdf2ctx-correcciones). Sus comprobaciones
+# quedan como GUARDIAS: si vuelven a fallar salen FALLA (regresión), ya no FALLA ESPERADA.
+CORREGIDAS = {
+    "V1": "R1: el gate marca 🔴 el texto no visible en el .md; el convertidor «visible» lo retira y lo declara",
+    "V2": "R2: cada cifra debe conservar las dos palabras que la preceden",
+    "V4": "R4: %%EOF, startxref y flujos comprimidos; archivo dañado → 🟡 NO VERIFICABLE",
+    "V5": "R5: folios impresos «N de M» con saltos o repetidos → 🟡",
+    "V6": "R6: la rotación queda en el informe, los avisos y el .docx",
+    "V7": "R7: anotaciones → 🟡 con tipo, rectángulo y contenido",
+    "V8": "R8: imagen ≥ 3 % del área en página con texto → 🟡",
+    "V10": "R10: oráculo y convertidor extraen sin giro",
+}
 
 # ───────────────────────── mutaciones del .md (el convertidor «se equivoca») ─────────────────────────
 
@@ -326,6 +339,10 @@ def c_docx_sin_defecto_como_valido(r, v):
         return True, f"bloqueado: {docx['causa'][:80]}"
     if "NO VERIFICADAS" in docx.get("encabezado", ""):
         return True, f"exportado con aviso: {docx['encabezado'][:80]}"
+    if v.get("oculto"):   # el defecto es el texto oculto: basta con que no llegue al .docx
+        dentro = [h for h in v["oculto"] if plano(h) in plano(docx["texto"])]
+        return not dentro, ("exportado sin el texto oculto (retirado y declarado)" if not dentro
+                            else "el .docx trae el texto oculto como lectura válida")
     return False, "el .docx se exporta como lectura válida, sin aviso"
 
 
@@ -370,8 +387,9 @@ OCULTO = [("visible_en_md", None), ("oculto_no_certificado", "V1"), ("docx_sin_d
 PERMUTACION = [("alteracion_detectada", "V2"), ("docx_sin_defecto_como_valido", "V2")]
 
 
-def caso(ident, fixture, chequeos, mutacion=None):
-    return {"id": ident, "fixture": fixture, "mutacion": mutacion, "chequeos": chequeos}
+def caso(ident, fixture, chequeos, mutacion=None, convertidor=None):
+    """convertidor=None usa el de por defecto del banco."""
+    return {"id": ident, "fixture": fixture, "mutacion": mutacion, "chequeos": chequeos, "convertidor": convertidor}
 
 
 def construir_casos(manifiesto: dict) -> list:
@@ -387,6 +405,10 @@ def construir_casos(manifiesto: dict) -> list:
         caso("A6_publico_oculto_modo_invisible", "publico_oculto", OCULTO),
         caso("A7_instruccion_visible_es_dato", "sintetico_instruccion_visible",
              [("verde_si_fiel", None), ("visible_en_md", None), ("docx_conserva_visible", None)]),
+        caso("A8_control_contraste", "sintetico_control_contraste",
+             [("verde_si_fiel", None), ("visible_en_md", None), ("oculto_no_certificado", None)]),
+        caso("A1m_oculto_con_convertidor_minimo", "sintetico_oculto_modo_invisible", OCULTO, convertidor="minimo"),
+        caso("A6m_publico_oculto_con_convertidor_minimo", "publico_oculto", OCULTO, convertidor="minimo"),
         # B · tablas y orden de columnas (prioridad)
         caso("B1_tabla_por_renglones", "sintetico_tabla_renglones",
              [("verde_si_fiel", None), ("filas_preservadas", None)]),
@@ -407,6 +429,8 @@ def construir_casos(manifiesto: dict) -> list:
         # F · páginas giradas o invertidas
         caso("F1_paginas_giradas", "publico_rotado",
              [("anclas_en_orden", None), ("texto_rotado_intacto", "V10"), ("orientacion_registrada", "V6")]),
+        caso("F1m_paginas_giradas_con_convertidor_minimo", "publico_rotado",
+             [("anclas_en_orden", None), ("nunca_verde", "V10")], convertidor="minimo"),
         # G · páginas faltantes o duplicadas
         caso("G1_pdf_sin_p10", "publico_sin_pagina", [("anclas_en_orden", None), ("folios_verificados", "V5")]),
         caso("G2_pdf_p10_duplicada", "publico_pagina_duplicada",
@@ -434,8 +458,11 @@ def hijo(ruta_entrada: Path) -> int:
     banco.TRABAJO = Path(entrada["trabajo"])
     banco.TRABAJO.mkdir(parents=True, exist_ok=True)
     pdf = Path(entrada["pdf"])
+    consulta = {"nombre": [pdf.name]}
+    if entrada.get("convertidor"):
+        consulta["convertidor"] = [entrada["convertidor"]]
     try:
-        vista = banco.subir_pdf(pdf.read_bytes(), {"nombre": [pdf.name]})
+        vista = banco.subir_pdf(pdf.read_bytes(), consulta)
         carpeta = banco.TRABAJO / vista["id"]
         resultado = {"estado": "ok", "http": 200, "md_sistema_sha256": hashlib.sha256(
             (carpeta / "documento.md").read_bytes()).hexdigest()}
@@ -545,8 +572,9 @@ def fidelidad_visual(r: dict, v: dict) -> list:
         problemas.append(f"el PDF omite la p. {v['paginas_faltantes']}")
     if v.get("paginas_duplicadas"):
         problemas.append(f"el PDF duplica la p. {v['paginas_duplicadas']}")
-    if v.get("rotaciones"):
+    if v.get("rotaciones") and not all(pagina_de(r, int(n)).get("rotacion") for n in v["rotaciones"]):
         problemas.append("no registra la orientación de las páginas giradas")
+    if v.get("rotaciones"):
         paginas, _, _ = gate.leer_md(md)
         alteradas = [n for n, t in v["texto_paginas"].items() if plano(paginas.get(int(n), "")) != t]
         if alteradas:
@@ -561,11 +589,19 @@ def fidelidad_visual(r: dict, v: dict) -> list:
 # ───────────────────────── corrida ─────────────────────────
 
 def clasificar(cumple, vulnerabilidad) -> str:
+    """Una vulnerabilidad corregida ya no excusa una falla: su comprobación es guardia de regresión."""
+    pendiente = bool(vulnerabilidad) and vulnerabilidad not in CORREGIDAS
     if cumple is None:
         return "NO APLICA"
     if cumple:
-        return "PASA INESPERADO" if vulnerabilidad else "PASA"
-    return "FALLA ESPERADA" if vulnerabilidad else "FALLA"
+        return "PASA INESPERADO" if pendiente else "PASA"
+    return "FALLA ESPERADA" if pendiente else "FALLA"
+
+
+def etiqueta(vulnerabilidad) -> str:
+    if not vulnerabilidad:
+        return ""
+    return f" [{vulnerabilidad} corregida]" if vulnerabilidad in CORREGIDAS else f" [{vulnerabilidad}]"
 
 
 ICONO = {"PASA": "✅", "FALLA ESPERADA": "🟠", "FALLA": "❌", "PASA INESPERADO": "❗", "NO APLICA": "➖"}
@@ -622,8 +658,7 @@ def main() -> int:
         eje = eje or CHEQUEOS[nombre][0]
         resultados.append({"caso": caso_id, "comprobacion": nombre, "eje": eje, "vulnerabilidad": vulnerabilidad,
                            "estado": estado, "detalle": detalle})
-        etiqueta = f" [{vulnerabilidad}]" if vulnerabilidad else ""
-        print(f"  {ICONO[estado]} {estado:<15} {nombre}{etiqueta} — {detalle}", flush=True)
+        print(f"  {ICONO[estado]} {estado:<15} {nombre}{etiqueta(vulnerabilidad)} — {detalle}", flush=True)
 
     print("\n— INSTRUMENTO")
     registrar("INSTRUMENTO", "fixtures_reproducibles", None, not distintos,
@@ -632,7 +667,7 @@ def main() -> int:
 
     solo = [s.strip() for s in args.solo.split(",") if s.strip()]
     casos = [c for c in construir_casos(manifiesto) if not solo or any(c["id"].startswith(s) for s in solo)]
-    visuales = []
+    visuales, nunca_relaja = [], []
     for c in casos:
         f = manifiesto[c["fixture"]]
         ruta_pdf = Path(f["archivo"]) if Path(f["archivo"]).is_absolute() else fixtures / f["archivo"]
@@ -641,8 +676,15 @@ def main() -> int:
         ruta_verdad = carpeta_caso / "verdad.json"
         ruta_verdad.write_text(json.dumps(f["verdad"], ensure_ascii=False, indent=2), encoding="utf-8")
         r = correr_caso({"pdf": str(ruta_pdf), "verdad": str(ruta_verdad), "mutacion": c["mutacion"],
+                         "convertidor": c["convertidor"],
                          "trabajo": str(carpeta_caso / "trabajo"), "salida": str(carpeta_caso / "resultado.json")},
                         carpeta_caso)
+        if r["estado"] == "ok" and "kit" in r["informe"]:
+            relajadas = [d["pagina"] for d in r["informe"]["detalle"]
+                         if NIVEL[d["veredicto"]] < NIVEL[d.get("veredicto_kit", d["veredicto"])]]
+            if NIVEL[r["informe"]["veredicto"]] < NIVEL[r["informe"]["kit"]["veredicto"]]:
+                relajadas.append("documento")
+            nunca_relaja.append((c["id"], relajadas))
         if r["estado"] == "ok":
             (carpeta_caso / "documento.md").write_text(r["md"], encoding="utf-8")
             (carpeta_caso / "informe.json").write_text(json.dumps(r["informe"], ensure_ascii=False, indent=2),
@@ -681,6 +723,10 @@ def main() -> int:
 
     sha_despues = sha256_archivo(original)
     print("\n— INSTRUMENTO")
+    relajados = [(c, p) for c, p in nunca_relaja if p]
+    registrar("INSTRUMENTO", "refuerzo_nunca_relaja", None, not relajados,
+              f"en {len(nunca_relaja)} casos ninguna página ni documento bajó de severidad respecto del kit"
+              if not relajados else f"relaja en {relajados[:3]}", eje="instrumento")
     registrar("INSTRUMENTO", "original_inmutable", None, sha_antes == sha_despues == fabricar.ORIGINAL_SHA256,
               f"SHA-256 {sha_despues[:16]}… antes y después de la corrida", eje="instrumento")
 
@@ -698,7 +744,8 @@ def main() -> int:
                      for k, f in manifiesto.items()},
         "vulnerabilidades": {k: {"eje": e, "titulo": t, "descripcion": d,
                                  "origen": ("hallada por esta suite: " + HALLADAS_POR_LA_SUITE[k])
-                                 if k in HALLADAS_POR_LA_SUITE else "prevista antes de la suite"}
+                                 if k in HALLADAS_POR_LA_SUITE else "prevista antes de la suite",
+                                 "estado": ("corregida · " + CORREGIDAS[k]) if k in CORREGIDAS else "pendiente"}
                              for k, (e, t, d) in VULNERABILIDADES.items()},
         "fidelidades": visuales, "sondas": sondas, "resultados": resultados,
         "conteos": conteos, "codigo_salida": codigo,
@@ -769,14 +816,23 @@ def escribir_informe(resumen: dict, sha_resumen: str, carpeta: Path) -> str:
                 "⚠️ 🟢 no fiel a lo visible" if f["verde"] and f["visual"] else ""]
                for f in resumen["fidelidades"]]),
         "",
-        "## Vulnerabilidades pendientes",
+        "## Vulnerabilidades",
+        "",
+        "Las **pendientes** se registran como fallas esperadas. Las **corregidas** dejan sus comprobaciones como "
+        "guardias: si vuelven a fallar, la suite sale 1.",
         "",
     ]
-    filas = []
-    for clave, vul in resumen["vulnerabilidades"].items():
-        casos = sorted({r["caso"] for r in resultados if r["vulnerabilidad"] == clave and r["estado"] == "FALLA ESPERADA"})
-        filas.append([clave, vul["titulo"], vul["eje"], vul["origen"], ", ".join(casos) or "—"])
-    partes += [tabla(["id", "vulnerabilidad", "eje", "origen", "casos donde se manifestó"], filas), ""]
+    for titulo, pendientes in (("### Pendientes", True), ("### Corregidas por `gate_reforzado.py`", False)):
+        filas = []
+        for clave, vul in resumen["vulnerabilidades"].items():
+            if (vul["estado"] == "pendiente") != pendientes:
+                continue
+            estados = ("FALLA ESPERADA",) if pendientes else ("PASA",)
+            casos = sorted({r["caso"] for r in resultados if r["vulnerabilidad"] == clave and r["estado"] in estados})
+            filas.append([clave, vul["titulo"], vul["eje"], vul["origen"], vul["estado"],
+                          ", ".join(casos) or "—"])
+        encabezado = "casos donde se manifiesta" if pendientes else "casos que la vigilan (pasan)"
+        partes += [titulo, "", tabla(["id", "vulnerabilidad", "eje", "origen", "estado", encabezado], filas), ""]
     for clave, vul in resumen["vulnerabilidades"].items():
         partes.append(f"- **{clave} · {vul['titulo']}.** {vul['descripcion']}")
     partes += ["", "## Resultados por eje", ""]
@@ -784,7 +840,7 @@ def escribir_informe(resumen: dict, sha_resumen: str, carpeta: Path) -> str:
         del_eje = [r for r in resultados if r["eje"] == eje]
         if del_eje:
             partes += [f"### {eje}", "", tabla(["caso", "comprobación", "estado", "detalle"], [
-                [r["caso"], r["comprobacion"] + (f" [{r['vulnerabilidad']}]" if r["vulnerabilidad"] else ""),
+                [r["caso"], r["comprobacion"] + etiqueta(r["vulnerabilidad"]),
                  f"{ICONO[r['estado']]} {r['estado']}", r["detalle"]] for r in del_eje]), ""]
     partes += [
         "## Sonda de tinta (instrumento sin OCR)",

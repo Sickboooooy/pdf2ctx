@@ -1,7 +1,15 @@
 # pdf2ctx · suite de PDFs defectuosos (fuzz + regresión)
 
-Comprueba si el sistema (banco: convertidor `minimo` + `gate_fidelidad` + exportación `.docx`)
-**detecta errores, conserva evidencia y evita producir texto jurídico aparentemente válido cuando no lo es**.
+Comprueba si el sistema (banco: convertidor `visible` por defecto, o `minimo` donde el caso lo pide, +
+`gate_reforzado`, que corre el gate del kit, + exportación `.docx`) **detecta errores, conserva evidencia y evita
+producir texto jurídico aparentemente válido cuando no lo es**.
+
+**Estado (rama `feat/pdf2ctx-correcciones`):** `gate_reforzado.py` corrigió **V1, V2, V4, V5, V6, V7, V8 y V10**.
+Sus comprobaciones quedan como **guardias de regresión** (`CORREGIDAS` en `probar_defectos.py`): si vuelven a
+fallar, salen FALLA. Quedan pendientes **V3** (tabla dibujada por columnas: requiere análisis de maquetación) y
+**V9** (discrepancia entre capa OCR e imagen: requiere OCR). Hay casos de control contra falsos positivos (A8:
+marca de agua gris y texto blanco sobre franja oscura) y casos con el convertidor `minimo` (A1m, A6m, F1m) que
+prueban que el gate *detecta* lo que ese convertidor no corrige.
 
 | Archivo | Qué es |
 |---|---|
@@ -29,7 +37,7 @@ Las **fallas esperadas** no hacen salir 1, pero se cuentan y se reportan siempre
 - **Fuzz**: bytes del original truncados o alterados con semilla fija.
 
 El original **nunca se escribe**: se identifica por SHA-256 (`f2b5b177…4a8e91a6`) y se verifica antes de
-fabricar, durante y al terminar. Los 38 fixtures salen **idénticos byte a byte** en cada corrida; la suite lo
+fabricar, durante y al terminar. Los 39 fixtures salen **idénticos byte a byte** en cada corrida; la suite lo
 comprueba fabricando dos veces. En las copias que guarda pypdfium2 se fija el segundo elemento de `/ID`, que
 PDFium vuelve aleatorio, con un valor de la misma longitud: el xref no se mueve.
 

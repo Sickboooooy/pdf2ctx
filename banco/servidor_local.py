@@ -6,7 +6,8 @@ servidor_local.py — Banco de pruebas local de pdf2ctx
 Sube un PDF, lo convierte a .md canónico (anclas [[p. N]]), corre el gate del kit y muestra,
 página por página, la imagen del original, el texto .md editable y los hallazgos.
 
-El veredicto (🟢 🟡 🔴) y su código (0/1/3) salen SOLO de gate_fidelidad.verificar().
+El veredicto (🟢 🟡 🔴) y su código (0/1/3) salen SOLO del gate: gate_reforzado.verificar(),
+que corre gate_fidelidad.verificar() del kit y solo puede endurecer su veredicto, nunca relajarlo.
 Este servidor no calcula veredictos: guarda el informe del gate y lo entrega tal cual.
 
 Seguridad
@@ -39,6 +40,7 @@ CARPETA_KIT = CARPETA_BANCO.parent
 sys.path.insert(0, str(CARPETA_KIT))  # el kit se importa; nunca se copia ni se edita
 
 import gate_fidelidad as gate  # noqa: E402
+import gate_reforzado as refuerzo  # noqa: E402
 import medir_tokens  # noqa: E402
 import pypdfium2 as pdfium  # noqa: E402
 from docx import Document  # noqa: E402
@@ -72,15 +74,23 @@ class ErrorBanco(Exception):
 
 
 # ───────────────────────── convertidores ─────────────────────────
-# Punto de extensión. Un convertidor recibe (ruta_pdf, ruta_md) y escribe un .md con una
-# línea [[p. N]] por página del original, en orden. Docling u otros entran aquí en Sprint 1.
+# Punto de extensión. Un convertidor recibe (ruta_pdf, ruta_md), escribe un .md con una línea
+# [[p. N]] por página del original, en orden, y devuelve la lista de retiros que declara
+# ([{pagina, texto, motivo}], vacía si no quitó nada). Docling u otros entran aquí en Sprint 1.
 
-def convertir_minimo(ruta_pdf: Path, ruta_md: Path) -> None:
-    """Convertidor del kit: capa de texto + anclas. Mide tokens; NO prueba fidelidad."""
+def convertir_visible(ruta_pdf: Path, ruta_md: Path) -> list:
+    """Capa de texto sin giro y sin el texto que no se ve; lo retirado se declara (gate_reforzado)."""
+    return refuerzo.convertir_visible(ruta_pdf, ruta_md)
+
+
+def convertir_minimo(ruta_pdf: Path, ruta_md: Path) -> list:
+    """Convertidor del kit: capa de texto + anclas, tal cual. Mide tokens; NO prueba fidelidad."""
     gate.exportar_minimo(ruta_pdf, ruta_md)
+    return []
 
 
-CONVERTIDORES = {"minimo": convertir_minimo}
+CONVERTIDORES = {"visible": convertir_visible, "minimo": convertir_minimo}  # el primero es el de por defecto
+CONVERTIDOR_DEFECTO = "visible"
 
 
 # ───────────────────────── documentos en trabajo/ ─────────────────────────
@@ -108,13 +118,28 @@ def escribir_json(ruta: Path, datos) -> None:
     ruta.write_text(json.dumps(datos, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def guardar_retiros(carpeta: Path, retiros: list) -> None:
+    ruta = carpeta / "retiros.json"
+    if retiros:
+        escribir_json(ruta, {"retiros": retiros})
+    elif ruta.exists():
+        ruta.unlink()
+
+
+def leer_retiros(carpeta: Path) -> list:
+    ruta = carpeta / "retiros.json"
+    return leer_json(ruta)["retiros"] if ruta.is_file() else []
+
+
 def guardar_y_verificar(carpeta: Path, datos_md: bytes = None) -> dict:
-    """Escribe el .md (si viene) y corre el gate del kit sobre el .md completo.
-    El informe se guarda tal cual lo devuelve gate_fidelidad.verificar()."""
+    """Escribe el .md (si viene) y corre el gate sobre el .md completo, con los retiros declarados.
+    El informe se guarda tal cual lo devuelve gate_reforzado.verificar()."""
     with CANDADO:
         if datos_md is not None:
             (carpeta / "documento.md").write_bytes(datos_md)
-        informe = gate.verificar(carpeta / "original.pdf", carpeta / "documento.md")
+        retiros = carpeta / "retiros.json"
+        informe = refuerzo.verificar(carpeta / "original.pdf", carpeta / "documento.md",
+                                     retiros if retiros.is_file() else None)
         escribir_json(carpeta / "informe.json", informe)
     return informe
 
@@ -151,9 +176,10 @@ def vista(carpeta: Path) -> dict:
         meta = leer_json(carpeta / "meta.json")
         informe = leer_json(carpeta / "informe.json")
         preambulo, segmentos = segmentos_md(leer_md(carpeta))
+        retiros = leer_retiros(carpeta)
     permitido, causa = politica_docx(informe, segmentos)
     return {"id": carpeta.name, "nombre_pdf": meta["nombre_pdf"], "origen_md": meta["origen_md"],
-            "informe": informe, "preambulo": preambulo, "segmentos": segmentos,
+            "informe": informe, "preambulo": preambulo, "segmentos": segmentos, "retiros": retiros,
             "docx": {"permitido": permitido, "causa": causa}}
 
 
@@ -209,7 +235,7 @@ def token_valido(recibido: str) -> bool:
 def subir_pdf(cuerpo: bytes, consulta: dict) -> dict:
     if not cuerpo.startswith(b"%PDF-"):
         raise ErrorBanco(400, "El archivo no es un PDF: no empieza con %PDF-")
-    convertidor = parametro(consulta, "convertidor", "minimo")
+    convertidor = parametro(consulta, "convertidor", CONVERTIDOR_DEFECTO)
     if convertidor not in CONVERTIDORES:
         raise ErrorBanco(400, f"Convertidor desconocido: {convertidor}")
     nombre = nombre_seguro(parametro(consulta, "nombre", ""), "documento.pdf")
@@ -218,7 +244,8 @@ def subir_pdf(cuerpo: bytes, consulta: dict) -> dict:
     try:
         (carpeta / "original.pdf").write_bytes(cuerpo)
         with CANDADO:
-            CONVERTIDORES[convertidor](carpeta / "original.pdf", carpeta / "documento.md")
+            retiros = CONVERTIDORES[convertidor](carpeta / "original.pdf", carpeta / "documento.md")
+            guardar_retiros(carpeta, retiros)
         escribir_json(carpeta / "meta.json", {"nombre_pdf": nombre, "convertidor": convertidor,
                                               "origen_md": f"convertidor «{convertidor}»"})
         guardar_y_verificar(carpeta)
@@ -258,8 +285,9 @@ def subir_md_externo(carpeta: Path, cuerpo: bytes, consulta: dict) -> dict:
     nombre = nombre_seguro(parametro(consulta, "nombre", ""), "externo.md")
     with CANDADO:
         meta = leer_json(carpeta / "meta.json")
-        meta["origen_md"] = f"externo «{nombre}»"
+        meta["origen_md"] = f"externo «{nombre}» (sin retiros declarados)"
         escribir_json(carpeta / "meta.json", meta)
+        guardar_retiros(carpeta, [])          # los retiros eran del convertidor, no de este .md
         guardar_y_verificar(carpeta, cuerpo)  # bytes tal cual: el banco no toca el .md
     return vista(carpeta)
 
@@ -354,9 +382,12 @@ def construir_docx(informe: dict, nombre_pdf: str, preambulo: str, segmentos: li
     if hay_preambulo:
         doc.add_paragraph().add_run("Texto antes de [[p. 1]] (no atribuible a una página):").italic = True
         agregar_lineas(doc, preambulo)
+    giradas = {d["pagina"]: d["rotacion"] for d in informe["detalle"] if d.get("rotacion")}
     for n in range(1, informe["paginas"] + 1):
         parrafo = doc.add_paragraph(f"p. {n}", style=ESTILO_MARCA)
         parrafo.paragraph_format.page_break_before = n > 1 or hay_preambulo
+        if n in giradas:
+            doc.add_paragraph().add_run(f"Página girada {giradas[n]}° en el original.").italic = True
         agregar_lineas(doc, "".join(por_pagina.get(n, [])))
 
     buffer = io.BytesIO()
@@ -436,7 +467,7 @@ def medir(carpeta: Path, cuerpo: bytes) -> dict:
 
 def configuracion() -> dict:
     disponible, causa = estado_tokens()
-    return {"version_gate": gate.VERSION, "convertidores": list(CONVERTIDORES),
+    return {"version_gate": f"{refuerzo.VERSION} · kit {gate.VERSION}", "convertidores": list(CONVERTIDORES),
             "tokens": {"disponible": disponible, "causa": causa,
                        "modelo_defecto": medir_tokens.MODELO_DEFECTO},
             "tope_pdf_mb": TOPE_PDF // 2 ** 20, "tope_md_mb": TOPE_TEXTO // 2 ** 20}

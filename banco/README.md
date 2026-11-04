@@ -3,13 +3,16 @@
 Banco local para la conversión **PDF → `.md` canónico (anclas `[[p. N]]`) → `.docx` de lectura humana**,
 viendo página por página lo que dice el gate del kit Sprint 0.
 
-El veredicto 🟢 🟡 🔴 y su código 0/1/3 salen **solo** de `gate_fidelidad.verificar()`.
-El servidor guarda ese informe tal cual y la UI solo lo pinta.
+El veredicto 🟢 🟡 🔴 y su código 0/1/3 salen **solo** del gate: `gate_reforzado.verificar()`, que corre
+`gate_fidelidad.verificar()` del kit y le añade los refuerzos R1–R10. Esos refuerzos solo pueden endurecer
+el veredicto, nunca relajarlo. El servidor guarda el informe tal cual y la UI solo lo pinta, junto con el
+veredicto que dio el kit antes de los refuerzos.
 
 | Archivo | Qué es |
 |---|---|
 | `servidor_local.py` | Servidor HTTP (biblioteca estándar + el kit + python-docx/Pillow). Solo `127.0.0.1`. |
-| `banco.html` | La UI: un solo archivo, sin CDNs ni recursos externos. |
+| `banco.html` | La UI, con el diseño de itosturre.com: un solo archivo, sin CDNs ni recursos externos. |
+| `../gate_reforzado.py` | Refuerzos del gate y convertidor `visible` (no es parte del kit: lo importa). |
 | `probar_banco.py` | El gate de esta tarea: arranca el servidor y lo prueba de punta a punta. |
 | `trabajo/` | Documentos subidos (en `.gitignore`: puede contener expedientes confidenciales). |
 
@@ -40,9 +43,13 @@ Dependencias nuevas: python-docx 1.2.0 (MIT, trae lxml BSD-3 y typing_extensions
 
 ## Qué hace
 
-1. **Subir PDF** → convertidor `minimo` del kit → resumen (veredicto, código, páginas, clases de oráculo,
-   residuo G3, sha256 del PDF y del `.md`) y una fila por página: imagen renderizada en el servidor con
-   pypdfium2 | texto `.md` editable | hallazgos del gate.
+1. **Subir PDF** → convertidor (`visible` por defecto, o `minimo` del kit) → resumen (veredicto del gate y
+   del kit, código, páginas, clases de oráculo, residuo G3, sha256 del PDF y del `.md`, retiros declarados,
+   avisos) y una fila por página: imagen renderizada en el servidor con pypdfium2 | texto `.md` editable |
+   hallazgos del gate (G1–G5 del kit y R1–R10 del refuerzo).
+   - `visible`: extrae sin giro y retira el texto que no se ve (modo invisible, blanco sobre blanco,
+     microtexto, fuera de la página, tapado). Lo retirado se declara en `retiros.json` y el G5 del kit lo verifica.
+   - `minimo`: la capa de texto tal cual. El gate reforzado marca 🔴 si ese `.md` trae texto no visible.
 2. **Re-verificar**: tras editar el texto (por ejemplo, cambiar un dígito) el gate corre sobre el `.md`
    completo y la UI se repinta. Mientras haya cambios sin verificar, la UI lo avisa.
 3. **Subir `.md` externo** (Docling u otro) y verificarlo contra el mismo PDF.
@@ -56,9 +63,19 @@ Dependencias nuevas: python-docx 1.2.0 (MIT, trae lxml BSD-3 y typing_extensions
    Sin `ANTHROPIC_API_KEY`, el botón queda deshabilitado con su causa y el servidor responde 412 sin tocar
    la red. No hay estimaciones heurísticas: solo cifras de la API; cada respuesta se guarda en
    `trabajo/<id>/tokens/`.
-6. **Punto de extensión**: `CONVERTIDORES = {"minimo": convertir_minimo}` en `servidor_local.py`.
-   Un convertidor recibe `(ruta_pdf, ruta_md)` y escribe un `.md` con una línea `[[p. N]]` por página.
-   Docling no está integrado en esta iteración.
+6. **Punto de extensión**: `CONVERTIDORES = {"visible": …, "minimo": …}` en `servidor_local.py`.
+   Un convertidor recibe `(ruta_pdf, ruta_md)`, escribe un `.md` con una línea `[[p. N]]` por página y
+   devuelve los retiros que declara (lista vacía si no quitó nada). Docling no está integrado todavía.
+   Un `.md` externo no trae retiros: al subirlo se limpian los del convertidor.
+
+## Diseño
+
+Tomado de www.itosturre.com: la paleta (tinta `#050B14`, noche, papel, acero, cian `#3CC8F0`), el sello y el
+logotipo «itosturre», los chips con punto, los botones píldora y el radio de 14 px. Los estados usan tu
+vocabulario y tus colores: **Verificado** (verde) = 🟢, **Requiere confirmación** (ámbar) = 🟡 y
+**No pasa** (lacre) = 🔴. Las tipografías de la marca (Gloock, IBM Plex Sans/Mono) **no se descargan**,
+porque el banco no carga recursos externos: se usan si están instaladas en la máquina y, si no, sus respaldos
+(Georgia y la tipografía del sistema).
 
 ## Seguridad
 
@@ -121,6 +138,16 @@ En el navegador aparecieron dos defectos que la API no muestra; ambos quedaron c
 que se pintaban como «null», y el repintado tras re-verificar, que pedía las 128 imágenes a la vez en lugar
 de cargarlas al desplazarse.
 
+## Correcciones verificadas (rama `feat/pdf2ctx-correcciones`, 4-XI-2026)
+
+- `probar_banco.py` con el gate reforzado y el convertidor `visible` por defecto: **56 pasan · 0 fallan**.
+- `defectos/probar_defectos.py`: corregidas **V1, V2, V4, V5, V6, V7, V8 y V10**; quedan pendientes **V3** y **V9**.
+  Ver `defectos/INFORME_COBERTURA.md`.
+- Ley del IVA limpia: 🟢 con los dos convertidores. El convertidor `visible` sobre la ley con la instrucción
+  oculta inyectada da exactamente el mismo `.md` que la ley limpia (mismo SHA-256) y declara el retiro.
+- UI rediseñada, probada en Chrome: el veredicto del kit y el del gate se ven lado a lado (p. ej., kit
+  «Verificado» → gate «No pasa» por R1), sin errores de consola ni violaciones de CSP.
+
 ## Qué NO quedó verificado
 
 - **La API real de Anthropic**: nunca se llamó; la medición solo se probó contra el imitador local.
@@ -129,7 +156,10 @@ de cargarlas al desplazarse.
 - **Otros navegadores** (Firefox, Safari) y el diálogo de confirmación de tokens con llave real en la UI.
 - **Windows/WSL2**: todo corrió en macOS.
 - **Python 3.12** (con el que se probó el kit): aquí se usó 3.14.2.
-- **`retiros.json`**: el gate lo acepta, pero el banco no tiene forma de subirlo.
+- **`retiros.json` de terceros**: el banco usa los retiros que declara su convertidor, pero no permite subir
+  los de un convertidor externo junto con su `.md`.
+- **Tipografías exactas de la marca**: se ven solo si Gloock e IBM Plex están instaladas en la máquina.
+- **Costo de los refuerzos**: R1 renderiza cada página a 144 dpi (unos 3 s para las 128 páginas de la ley).
 - **PDFs muy grandes**: el render y el gate se serializan con un candado (PDFium no es seguro entre
   hilos); con cientos de páginas, una re-verificación espera a los renders en curso.
 - El `.docx` es de lectura: una línea del `.md` = un párrafo; no reconstruye tablas ni formato.

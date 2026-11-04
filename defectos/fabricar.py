@@ -264,6 +264,20 @@ def sintetico_control():
     return pdf.bytes(), verdad
 
 
+def sintetico_control_contraste():
+    """Control de falsos positivos: marca de agua gris claro y texto blanco sobre franja oscura. SE VEN."""
+    pdf, verdad = PdfSintetico(), verdad_nueva()
+    pdf.pagina()
+    dibujar_sentencia(pdf, verdad)
+    marca = "VERSIÓN PÚBLICA"
+    pdf.texto(120, 330, marca, tamano=36, color=(0.82, 0.82, 0.82))
+    pdf.rect(60, 250, 492, 30, (0.1, 0.12, 0.18))
+    franja = "SECRETARÍA DE ACUERDOS - FOJA 12"
+    pdf.texto(72, 260, franja, color=(1, 1, 1))
+    verdad["visible"] += [marca, franja]
+    return pdf.bytes(), verdad
+
+
 def sintetico_instruccion_visible():
     """Instrucción maliciosa y marcado HTML VISIBLES: son datos del documento y deben conservarse."""
     pdf, verdad = PdfSintetico(), verdad_nueva()
@@ -447,6 +461,8 @@ def fabricar(ruta_original: Path, carpeta: Path) -> dict:
                   *sintetico_oculto(tecnica))
     registrar("sintetico_instruccion_visible", "sintético", "instrucción y marcado HTML visibles",
               *sintetico_instruccion_visible())
+    registrar("sintetico_control_contraste", "sintético",
+              "ninguno (control: marca de agua gris y texto blanco sobre franja oscura)", *sintetico_control_contraste())
     registrar("sintetico_tabla_renglones", "sintético", "ninguno (tabla dibujada por renglones)",
               *sintetico_tabla(False))
     registrar("sintetico_tabla_columnas", "sintético", "tabla dibujada por columnas", *sintetico_tabla(True))
