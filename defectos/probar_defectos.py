@@ -46,6 +46,7 @@ sys.path.insert(0, str(CARPETA))             # fabricar.py
 
 import fabricar  # noqa: E402
 import gate_fidelidad as gate  # noqa: E402
+import gate_reforzado  # noqa: E402
 import pypdfium2 as pdfium  # noqa: E402
 
 VERDE, AMARILLO, ROJO = gate.VERDE, gate.AMARILLO, gate.ROJO
@@ -737,7 +738,8 @@ def main() -> int:
         "corrida": corrida, "rama": git("rev-parse", "--abbrev-ref", "HEAD"), "commit": git("rev-parse", "HEAD"),
         "cambios_sin_commit": bool(git("status", "--porcelain")),
         "entorno": {"python": platform.python_version(), "sistema": platform.platform(),
-                    "pypdfium2": importlib.metadata.version("pypdfium2"), "gate": gate.VERSION},
+                    "pypdfium2": importlib.metadata.version("pypdfium2"),
+                    "gate": f"gate_reforzado {gate_reforzado.VERSION} · kit {gate.VERSION}"},
         "original": {"nombre": fabricar.ORIGINAL_NOMBRE, "ruta": str(original),
                      "sha256_esperado": fabricar.ORIGINAL_SHA256, "antes": sha_antes, "despues": sha_despues},
         "fixtures": {k: {"sha256": f["sha256"], "origen": f["origen"], "defecto": f["defecto"], "bytes": f["bytes"]}
