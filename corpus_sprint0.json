@@ -1,0 +1,15 @@
+{
+  "descripcion": "Corpus Sprint 0 de pdf2ctx: 10 PDFs REALES de trabajo, no sintéticos. Rutas relativas a este archivo. 'md' es opcional: si es null se genera el .md mínimo.",
+  "documentos": [
+    {"id": "ley-01",   "categoria": "ley",           "pdf": "corpus/ley-01.pdf",   "md": null, "nota": "ley federal nativa con encabezados y artículos"},
+    {"id": "ley-02",   "categoria": "ley",           "pdf": "corpus/ley-02.pdf",   "md": null, "nota": "ley o reglamento con fracciones e incisos"},
+    {"id": "sent-01",  "categoria": "sentencia",     "pdf": "corpus/sent-01.pdf",  "md": null, "nota": "sentencia en versión pública con firma electrónica"},
+    {"id": "sent-02",  "categoria": "sentencia",     "pdf": "corpus/sent-02.pdf",  "md": null, "nota": "resolución con leyendas de datos eliminados"},
+    {"id": "scan-01",  "categoria": "escaneado",     "pdf": "corpus/scan-01.pdf",  "md": null, "nota": "escaneo SIN capa de texto: sus páginas deben salir 🟡"},
+    {"id": "scan-02",  "categoria": "escaneado_ocr", "pdf": "corpus/scan-02.pdf",  "md": null, "nota": "escaneo CON OCR previo: oráculo débil, 🟡"},
+    {"id": "tabla-01", "categoria": "tablas",        "pdf": "corpus/tabla-01.pdf", "md": null, "nota": "anexo o tarifa con tablas"},
+    {"id": "tabla-02", "categoria": "tablas",        "pdf": "corpus/tabla-02.pdf", "md": null, "nota": "cuadro comparativo o tabla multipágina"},
+    {"id": "tesis-01", "categoria": "tesis",         "pdf": "corpus/tesis-01.pdf", "md": null, "nota": "tesis o jurisprudencia exportada del SJF"},
+    {"id": "largo-01", "categoria": "largo",         "pdf": "corpus/largo-01.pdf", "md": null, "nota": "más de 100 páginas: prueba de límites de la API"}
+  ]
+}
