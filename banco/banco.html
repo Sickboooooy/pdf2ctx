@@ -188,13 +188,15 @@
       </div>
       <div id="resultado-tokens" class="metricas"></div>
       <div class="fila">
-        <button id="btn-transcribir">Transcribir imágenes con Claude</button>
-        <span class="causa" id="causa-transcribir"></span>
+        <button id="btn-transcribir" class="btn-lote">Transcribir imágenes con Claude</button>
+        <span class="causa causa-lote" id="causa-transcribir"></span>
       </div>
     </div>
 
     <div class="tarjeta fila">
       <label><input type="checkbox" id="solo-problemas"> Mostrar solo páginas que no están verificadas</label>
+      <button class="btn-lote">Transcribir imágenes con Claude</button>
+      <span class="causa causa-lote"></span>
     </div>
     <div id="preambulo"></div>
     <div id="paginas"></div>
@@ -363,6 +365,7 @@ function medirTokens() {
 function mostrar(datos) {
   vista = datos;
   ediciones.clear();
+  history.replaceState(null, "", "#doc=" + datos.id);   // recargar la página reabre este documento
   $("documento").hidden = false;
   pintarResumen();
   pintarAcciones();
@@ -425,12 +428,27 @@ function pintarAcciones() {
   $("causa-tokens").textContent = config.tokens.disponible
     ? "Pide confirmación antes de enviar el PDF a la API de Anthropic."
     : config.tokens.causa;
+  // El botón general (una sola confirmación para todas las marcadas pendientes) aparece en dos lugares.
   const pendientes = paginasPendientes();
-  $("btn-transcribir").disabled = !config.transcripcion.disponible || !pendientes.length;
-  $("btn-transcribir").textContent = "Transcribir imágenes con Claude (" + pendientes.length + " págs.)";
-  $("causa-transcribir").textContent = !config.transcripcion.disponible ? config.transcripcion.causa
-    : pendientes.length ? "Solo páginas marcadas por imágenes. Texto NO verificado; pide confirmación; tiene costo."
-    : "No hay páginas marcadas pendientes de transcribir.";
+  for (const boton of document.querySelectorAll(".btn-lote")) {
+    boton.disabled = !config.transcripcion.disponible || !pendientes.length;
+    boton.textContent = "Transcribir todas las páginas con imágenes (" + pendientes.length + ")";
+  }
+  for (const causa of document.querySelectorAll(".causa-lote")) {
+    causa.textContent = !config.transcripcion.disponible ? config.transcripcion.causa
+      : pendientes.length ? "Una sola confirmación para todas. Texto NO verificado; tiene costo."
+      : "No quedan páginas con imágenes por transcribir.";
+  }
+}
+
+// Uso real (reportado por la API) de las páginas ya transcritas: referencia antes de autorizar un lote.
+function referenciaDeUso() {
+  const hechas = Object.values(vista.transcripciones || {});
+  if (!hechas.length) return "Aún no hay páginas transcritas en este documento para tomar como referencia.";
+  const entrada = Math.round(hechas.reduce((s, t) => s + t.uso.input_tokens, 0) / hechas.length);
+  const salida = Math.round(hechas.reduce((s, t) => s + t.uso.output_tokens, 0) / hechas.length);
+  return "Referencia real: las " + hechas.length + " página(s) ya transcritas usaron en promedio " + entrada +
+         " tokens de entrada y " + salida + " de salida por página.";
 }
 
 // ───────── transcripción asistida (Claude visión): capa aparte, NO verificada ─────────
@@ -466,18 +484,27 @@ function cajaTranscripcion(n, d) {
 function transcribir(paginas) {
   if (!paginas.length) { avisar("No hay páginas marcadas sin transcribir.", false); return; }
   const modelo = config.transcripcion.modelo_defecto;
+  const lista = paginas.length > 12 ? paginas.slice(0, 12).join(", ") + "…" : paginas.join(", ");
   const aceptar = window.confirm(
     "⚠️ Transcribir con Claude ENVÍA " + paginas.length + " página(s) como imagen a la API de Anthropic (" +
-    modelo + "). Tiene COSTO real según los tokens que reporte la API.\n\n" +
+    modelo + "): pp. " + lista + ".\nTiene COSTO real según los tokens que reporte la API.\n" +
+    referenciaDeUso() + "\n\n" +
     "El texto resultante NO queda verificado contra el PDF: no entra al .md ni cambia el veredicto.\n\n" +
-    "¿Enviar páginas de «" + vista.nombre_pdf + "»?");
+    "¿Enviar estas páginas de «" + vista.nombre_pdf + "»? (una sola autorización para todas)");
   if (!aceptar) { avisar("Transcripción cancelada: no se envió nada.", false); return; }
   tarea("Transcribiendo…", async () => {
     let entrada = 0, salida = 0, hechas = 0;
     for (const n of paginas) {
       avisar("Transcribiendo p. " + n + " (" + (hechas + 1) + " de " + paginas.length + ")…", false);
-      const t = await pedirJson("POST", "/api/doc/" + vista.id + "/transcribir/" + n,
-                                JSON.stringify({ confirmado: true, modelo: modelo }), "application/json");
+      let t;
+      try {
+        t = await pedirJson("POST", "/api/doc/" + vista.id + "/transcribir/" + n,
+                            JSON.stringify({ confirmado: true, modelo: modelo }), "application/json");
+      } catch (e) {
+        pintarAcciones();
+        throw new Error("p. " + n + ": " + e.message + " — se transcribieron " + hechas + " de " + paginas.length +
+                        ". El botón general retoma solo las pendientes.");
+      }
       vista.transcripciones = vista.transcripciones || {};
       vista.transcripciones[String(n)] = t;
       entrada += t.uso.input_tokens; salida += t.uso.output_tokens; hechas += 1;
@@ -600,11 +627,20 @@ async function iniciar() {
   $("btn-informe").addEventListener("click", () => descargar("informe"));
   $("btn-docx").addEventListener("click", () => descargar("docx"));
   $("btn-tokens").addEventListener("click", medirTokens);
-  $("btn-transcribir").addEventListener("click", () => transcribir(paginasPendientes()));
+  for (const boton of document.querySelectorAll(".btn-lote")) {
+    boton.addEventListener("click", () => transcribir(paginasPendientes()));
+  }
   $("solo-problemas").addEventListener("change", (e) => {
     $("paginas").classList.toggle("solo-problemas", e.target.checked);
   });
   avisar("Tope: PDF de " + config.tope_pdf_mb + " MB, .md de " + config.tope_md_mb + " MB.", false);
+  const abierto = /^#doc=([0-9a-f]{32})$/.exec(location.hash);
+  if (abierto) {
+    tarea("Reabriendo el documento…", async () => {
+      mostrar(await pedirJson("GET", "/api/doc/" + abierto[1]));
+      avisar("Documento reabierto: «" + vista.nombre_pdf + "», con sus transcripciones.", false);
+    });
+  }
 }
 
 iniciar();
