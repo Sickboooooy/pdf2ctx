@@ -1,0 +1,9 @@
+# Pueden contener documentos confidenciales: nunca se versionan.
+banco/trabajo/
+corpus/
+resultados_sprint0/
+
+# Entorno local de Python
+.venv/
+__pycache__/
+*.pyc

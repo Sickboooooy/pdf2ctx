@@ -1,0 +1,456 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="token-banco" content="__TOKEN_BANCO__">
+<title>pdf2ctx · banco</title>
+<style>
+  :root {
+    --fondo: #f5f5f2; --tarjeta: #ffffff; --texto: #1d1d1b; --tenue: #6b6b66; --borde: #d9d9d3;
+    --acento: #2b4c7e; --verde: #1f7a3d; --amarillo: #8a5d00; --rojo: #b3261e;
+    --fondo-verde: #e6f3ea; --fondo-amarillo: #faf0d6; --fondo-rojo: #fae3e1;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --fondo: #151514; --tarjeta: #1f1f1d; --texto: #ececea; --tenue: #a3a39d; --borde: #3a3a36;
+      --acento: #8fb0e6; --verde: #6fcf8e; --amarillo: #e8b84a; --rojo: #ff8a80;
+      --fondo-verde: #17301e; --fondo-amarillo: #33290f; --fondo-rojo: #3a1a18;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--fondo); color: var(--texto);
+         font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { padding: 12px 16px; border-bottom: 1px solid var(--borde); display: flex; gap: 12px;
+           align-items: baseline; flex-wrap: wrap; }
+  h1 { font-size: 18px; margin: 0; }
+  h2 { font-size: 15px; margin: 0 0 10px; }
+  main { max-width: 1500px; margin: 0 auto; padding: 16px; }
+  .tarjeta { background: var(--tarjeta); border: 1px solid var(--borde); border-radius: 8px;
+             padding: 14px 16px; margin-bottom: 14px; }
+  .fila { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .fila + .fila { margin-top: 10px; }
+  button, select, input[type="text"] { font: inherit; padding: 6px 12px; border-radius: 6px;
+           border: 1px solid var(--borde); background: var(--tarjeta); color: var(--texto); }
+  button { cursor: pointer; }
+  button.primario { background: var(--acento); border-color: var(--acento); color: #fff; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  .tenue { color: var(--tenue); }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px;
+          word-break: break-all; }
+  #mensaje { min-height: 22px; margin: 0 0 12px; }
+  #mensaje.error { color: var(--rojo); font-weight: 600; }
+  .veredicto-grande { font-size: 22px; font-weight: 650; }
+  .rejilla { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px 18px;
+             margin-top: 12px; }
+  .dato { display: block; font-size: 12px; color: var(--tenue); }
+  .errores { color: var(--rojo); margin: 10px 0 0; padding-left: 20px; }
+  .avisos { color: var(--amarillo); margin: 8px 0 0; padding-left: 20px; }
+  .saltos a { color: var(--acento); margin-right: 8px; }
+  .sucio { color: var(--amarillo); font-weight: 600; }
+  .causa { font-size: 13px; color: var(--tenue); }
+  #resumen.v-verde { border-left: 6px solid var(--verde); }
+  #resumen.v-amarillo { border-left: 6px solid var(--amarillo); }
+  #resumen.v-rojo { border-left: 6px solid var(--rojo); }
+  .pagina { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, .8fr);
+            gap: 14px; border-left: 6px solid var(--borde); }
+  .pagina.v-verde { border-left-color: var(--verde); }
+  .pagina.v-amarillo { border-left-color: var(--amarillo); }
+  .pagina.v-rojo { border-left-color: var(--rojo); }
+  /* aspect-ratio reserva el alto de una hoja carta mientras la imagen no carga (lazy loading real);
+     al cargar manda la proporción verdadera de la página. */
+  .pagina img { width: 100%; height: auto; aspect-ratio: auto 8.5 / 11; border: 1px solid var(--borde);
+                background: #fff; }
+  textarea { width: 100%; min-height: 420px; resize: vertical; padding: 8px; border-radius: 6px;
+             border: 1px solid var(--borde); background: var(--fondo); color: var(--texto);
+             font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; }
+  textarea.editado { outline: 2px solid var(--amarillo); }
+  .cabecera-ancla { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px;
+                    color: var(--tenue); margin-bottom: 4px; }
+  .etiqueta { display: inline-block; padding: 2px 8px; border-radius: 4px; font-weight: 650; }
+  .v-verde .etiqueta { background: var(--fondo-verde); color: var(--verde); }
+  .v-amarillo .etiqueta { background: var(--fondo-amarillo); color: var(--amarillo); }
+  .v-rojo .etiqueta { background: var(--fondo-rojo); color: var(--rojo); }
+  .hallazgos { padding-left: 18px; margin: 10px 0; }
+  .hallazgos li { margin-bottom: 6px; overflow-wrap: anywhere; }
+  .metricas { font-size: 13px; overflow-wrap: anywhere; }
+  .solo-problemas .pagina.v-verde { display: none; }
+  @media (max-width: 900px) { .pagina { grid-template-columns: minmax(0, 1fr); } }
+</style>
+</head>
+<body>
+<header>
+  <h1>pdf2ctx · banco de pruebas</h1>
+  <span class="tenue" id="version"></span>
+  <span class="tenue">· local, solo 127.0.0.1</span>
+</header>
+<main>
+  <section class="tarjeta">
+    <h2>Subir PDF</h2>
+    <div class="fila">
+      <input type="file" id="archivo-pdf" accept="application/pdf,.pdf">
+      <label>Convertidor <select id="convertidor"></select></label>
+      <button class="primario" id="btn-convertir">Convertir y verificar</button>
+    </div>
+  </section>
+
+  <p id="mensaje" role="status" aria-live="polite"></p>
+
+  <section id="documento" hidden>
+    <div class="tarjeta" id="resumen"></div>
+
+    <div class="tarjeta">
+      <div class="fila">
+        <button id="btn-reverificar">Re-verificar el .md</button>
+        <span class="sucio" id="sucio" hidden>⚠ Hay cambios sin verificar: el veredicto mostrado es el
+          anterior y las descargas usan el último .md verificado.</span>
+      </div>
+      <div class="fila">
+        <label>Subir .md externo (Docling u otro) <input type="file" id="archivo-md" accept=".md,text/markdown,text/plain"></label>
+      </div>
+      <div class="fila">
+        <button id="btn-md">Descargar .md</button>
+        <button id="btn-informe">Descargar informe.json</button>
+        <button id="btn-docx">Descargar .docx</button>
+        <span class="causa" id="causa-docx"></span>
+      </div>
+      <div class="fila">
+        <button id="btn-tokens">Medir tokens</button>
+        <label>Modelo <input type="text" id="modelo" size="22" spellcheck="false"></label>
+        <span class="causa" id="causa-tokens"></span>
+      </div>
+      <div id="resultado-tokens" class="metricas"></div>
+    </div>
+
+    <div class="fila tarjeta">
+      <label><input type="checkbox" id="solo-problemas"> Mostrar solo páginas que no son 🟢</label>
+    </div>
+    <div id="preambulo"></div>
+    <div id="paginas"></div>
+    <div id="extras"></div>
+  </section>
+</main>
+
+<script nonce="__NONCE__">
+"use strict";
+// La UI solo pinta lo que devuelve el servidor. El veredicto y su código salen de
+// gate_fidelidad.verificar(); aquí no se calcula ninguno.
+
+const TOKEN = document.querySelector('meta[name="token-banco"]').content;
+const NOMBRE = { "🟢": "VERIFICADO", "🟡": "NO VERIFICABLE", "🔴": "PÉRDIDA O ALTERACIÓN" };
+const CLASE = { "🟢": "v-verde", "🟡": "v-amarillo", "🔴": "v-rojo" };
+
+let config = null;            // GET /api/config
+let vista = null;             // última respuesta del servidor para el documento abierto
+const ediciones = new Map();  // índice de segmento (o "pre") → texto editado aún sin verificar
+let trabajando = false;
+
+const $ = (id) => document.getElementById(id);
+
+// Crea nodos con textContent: el texto del PDF nunca se interpreta como HTML.
+function el(etiqueta, atributos, ...hijos) {
+  const nodo = document.createElement(etiqueta);
+  for (const [clave, valor] of Object.entries(atributos || {})) {
+    if (clave === "clase") nodo.className = valor;
+    else nodo.setAttribute(clave, valor);
+  }
+  for (const hijo of hijos) if (hijo !== null && hijo !== undefined) nodo.append(hijo);
+  return nodo;
+}
+
+// Como replaceChildren, pero omite los hijos null (si no, el navegador escribe "null").
+function reemplazar(nodo, ...hijos) {
+  nodo.replaceChildren(...hijos.filter((h) => h !== null && h !== undefined));
+}
+
+function avisar(texto, esError) {
+  $("mensaje").textContent = texto;
+  $("mensaje").className = esError ? "error" : "";
+}
+
+async function pedir(metodo, ruta, cuerpo, tipo) {
+  const opciones = { method: metodo, headers: {} };
+  if (metodo === "POST") {
+    opciones.headers["X-Banco-Token"] = TOKEN;
+    opciones.headers["Content-Type"] = tipo;
+    opciones.body = cuerpo;
+  }
+  return fetch(ruta, opciones);
+}
+
+async function errorDe(respuesta) {
+  try { return (await respuesta.json()).error || ("HTTP " + respuesta.status); }
+  catch (e) { return "HTTP " + respuesta.status; }
+}
+
+async function pedirJson(metodo, ruta, cuerpo, tipo) {
+  const respuesta = await pedir(metodo, ruta, cuerpo, tipo);
+  if (!respuesta.ok) throw new Error(await errorDe(respuesta));
+  return respuesta.json();
+}
+
+// Ejecuta una tarea a la vez y muestra su error, si lo hay.
+async function tarea(texto, funcion) {
+  if (trabajando) return;
+  trabajando = true;
+  avisar(texto, false);
+  try { await funcion(); }
+  catch (e) { avisar(e.message, true); }
+  finally { trabajando = false; }
+}
+
+function hayCambios() {
+  return ediciones.size > 0 && !window.confirm("Hay cambios sin verificar que se perderán. ¿Continuar?");
+}
+
+// ───────── acciones ─────────
+
+function convertir() {
+  const archivo = $("archivo-pdf").files[0];
+  if (!archivo) { avisar("Elige primero un PDF.", true); return; }
+  if (hayCambios()) return;
+  tarea("Convirtiendo y verificando «" + archivo.name + "»…", async () => {
+    const ruta = "/api/subir?convertidor=" + encodeURIComponent($("convertidor").value) +
+                 "&nombre=" + encodeURIComponent(archivo.name);
+    mostrar(await pedirJson("POST", ruta, await archivo.arrayBuffer(), "application/pdf"));
+    $("resultado-tokens").replaceChildren();
+    avisar("Listo: «" + archivo.name + "» convertido y verificado por el gate.", false);
+  });
+}
+
+// El .md completo: preámbulo + cada ancla con su cuerpo. Lo que no se editó va tal cual.
+function componerMd() {
+  let md = ediciones.has("pre") ? ediciones.get("pre") : vista.preambulo;
+  vista.segmentos.forEach((s, i) => {
+    md += s.cabecera + (ediciones.has(i) ? ediciones.get(i) : s.cuerpo);
+  });
+  return md;
+}
+
+function reverificar() {
+  tarea("Re-verificando el .md completo con el gate…", async () => {
+    const ruta = "/api/doc/" + vista.id + "/verificar";
+    mostrar(await pedirJson("POST", ruta, JSON.stringify({ md: componerMd() }), "application/json"));
+    avisar("Re-verificado: el gate corrió sobre el .md completo.", false);
+  });
+}
+
+function subirMd() {
+  const archivo = $("archivo-md").files[0];
+  if (!archivo || !vista) return;
+  if (hayCambios()) { $("archivo-md").value = ""; return; }
+  tarea("Verificando «" + archivo.name + "» contra el mismo PDF…", async () => {
+    const ruta = "/api/doc/" + vista.id + "/md?nombre=" + encodeURIComponent(archivo.name);
+    mostrar(await pedirJson("POST", ruta, await archivo.arrayBuffer(), "text/markdown; charset=utf-8"));
+    $("archivo-md").value = "";
+    avisar("«" + archivo.name + "» verificado contra el PDF original.", false);
+  });
+}
+
+function descargar(tipo) {
+  tarea("Preparando la descarga…", async () => {
+    const respuesta = await pedir("GET", "/api/doc/" + vista.id + "/descargar/" + tipo);
+    if (!respuesta.ok) throw new Error(await errorDe(respuesta));
+    const disposicion = respuesta.headers.get("Content-Disposition") || "";
+    const nombre = (/filename="([^"]+)"/.exec(disposicion) || [])[1] || "documento";
+    const url = URL.createObjectURL(await respuesta.blob());
+    const enlace = el("a", { href: url, download: nombre });
+    document.body.append(enlace);
+    enlace.click();
+    enlace.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    avisar("Descargado: " + nombre, false);
+  });
+}
+
+function medirTokens() {
+  if (!config.tokens.disponible || !vista) return;
+  const aceptar = window.confirm(
+    "⚠️ Medir tokens ENVÍA el PDF completo y el .md actual a la API de Anthropic " +
+    "(endpoint count_tokens). El documento saldrá de esta máquina.\n\n" +
+    "¿Enviar «" + vista.nombre_pdf + "»?");
+  if (!aceptar) { avisar("Medición cancelada: no se envió nada.", false); return; }
+  tarea("Midiendo tokens con count_tokens…", async () => {
+    const cuerpo = JSON.stringify({ confirmado: true, modelo: $("modelo").value.trim() });
+    pintarTokens(await pedirJson("POST", "/api/doc/" + vista.id + "/tokens", cuerpo, "application/json"));
+    avisar("Medición terminada.", false);
+  });
+}
+
+// ───────── pintado ─────────
+
+function mostrar(datos) {
+  vista = datos;
+  ediciones.clear();
+  $("documento").hidden = false;
+  pintarResumen();
+  pintarAcciones();
+  pintarPaginas();
+  marcarSucio();
+}
+
+function dato(etiqueta, valor) {
+  return el("div", {}, el("span", { clase: "dato" }, etiqueta), String(valor));
+}
+
+function lista(elementos, clase) {
+  if (!elementos || !elementos.length) return null;
+  return el("ul", { clase: clase }, ...elementos.map((t) => el("li", {}, t)));
+}
+
+function pintarResumen() {
+  const inf = vista.informe;
+  const r = inf.resumen;
+  const clases = Object.entries(inf.clases_oraculo).map(([k, v]) => k + ": " + v).join(" · ");
+  const residuo = inf.eficiencia.residuo_pct === null ? "—" : inf.eficiencia.residuo_pct + " %";
+  const problemas = inf.detalle.filter((d) => d.veredicto !== "🟢");
+  const saltos = problemas.length
+    ? el("div", { clase: "saltos" }, el("span", { clase: "dato" }, "Páginas con hallazgos"),
+        ...problemas.slice(0, 300).map((d) => el("a", { href: "#p-" + d.pagina }, d.veredicto + " p. " + d.pagina)))
+    : null;
+
+  $("resumen").className = "tarjeta " + (CLASE[inf.veredicto] || "");
+  reemplazar($("resumen"),
+    el("div", { clase: "fila" },
+      el("span", { clase: "veredicto-grande" }, inf.veredicto + " " + (NOMBRE[inf.veredicto] || "")),
+      el("span", { clase: "tenue" }, "código " + inf.codigo_salida)),
+    el("div", { clase: "rejilla" },
+      dato("Documento", vista.nombre_pdf),
+      dato("Origen del .md", vista.origen_md),
+      dato("Páginas", inf.paginas + " · " + r.verde + " 🟢 · " + r.amarillo + " 🟡 · " + r.rojo + " 🔴"),
+      dato("Clases de oráculo", clases),
+      dato("Residuo G3 (líneas repetidas)", residuo),
+      dato("Gate", inf.gate + " " + inf.version)),
+    el("div", { clase: "rejilla" },
+      el("div", {}, el("span", { clase: "dato" }, "sha256 del PDF"), el("span", { clase: "mono" }, inf.sha256_pdf)),
+      el("div", {}, el("span", { clase: "dato" }, "sha256 del .md"), el("span", { clase: "mono" }, inf.sha256_md))),
+    lista(inf.errores_documento.map((e) => "🔴 " + e), "errores"),
+    lista(inf.avisos, "avisos"),
+    saltos);
+}
+
+function pintarAcciones() {
+  $("btn-docx").disabled = !vista.docx.permitido;
+  $("causa-docx").textContent = vista.docx.causa;
+  $("btn-tokens").disabled = !config.tokens.disponible;
+  $("causa-tokens").textContent = config.tokens.disponible
+    ? "Pide confirmación antes de enviar el PDF a la API de Anthropic."
+    : config.tokens.causa;
+}
+
+function pintarTokens(d) {
+  const ahorro = d.ahorro_pct === null ? "" : " · ahorro " + d.ahorro_pct + " %";
+  reemplazar($("resultado-tokens"),
+    el("div", {}, el("strong", {}, d.estado), " · " + d.modelo + " · " + d.paginas + " págs"),
+    el("div", {}, "PDF nativo: " + d.tokens_pdf_nativo + " tokens · .md: " + d.tokens_md + " tokens" + ahorro),
+    d.nota ? el("div", { clase: "tenue" }, d.nota) : null,
+    el("div", { clase: "tenue" }, "Cifras de count_tokens (la API advierte que son estimaciones). " +
+                                   "Respuestas JSON en " + d.respuestas));
+}
+
+function areaTexto(clave, texto, etiqueta) {
+  const area = el("textarea", { spellcheck: "false", "aria-label": etiqueta });
+  area.value = texto;
+  area.addEventListener("input", () => {
+    ediciones.set(clave, area.value);
+    area.classList.add("editado");
+    marcarSucio();
+  });
+  return area;
+}
+
+function metricas(m) {
+  const filas = [];
+  if (m.cobertura_palabras !== undefined) filas.push("cobertura de palabras: " + m.cobertura_palabras);
+  if (m.fraccion_retirada) filas.push("fracción retirada: " + m.fraccion_retirada);
+  if (m.invariantes_por_cotejar && m.invariantes_por_cotejar.length) {
+    filas.push("cifras por cotejar contra la imagen: " + m.invariantes_por_cotejar.join(", "));
+  }
+  return filas.length ? el("div", { clase: "metricas tenue" }, ...filas.map((f) => el("div", {}, f))) : null;
+}
+
+function pintarPaginas() {
+  const inf = vista.informe;
+  const detalle = new Map(inf.detalle.map((d) => [d.pagina, d]));
+  const porAncla = new Map();
+  vista.segmentos.forEach((s, i) => {
+    if (!porAncla.has(s.ancla)) porAncla.set(s.ancla, []);
+    porAncla.get(s.ancla).push(i);
+  });
+
+  $("preambulo").replaceChildren();
+  if (vista.preambulo.trim() || !vista.segmentos.length) {
+    const titulo = vista.segmentos.length
+      ? "Texto antes de [[p. 1]] (no atribuible a una página)"
+      : "El .md no tiene anclas [[p. N]]: este es todo su texto";
+    $("preambulo").append(el("div", { clase: "tarjeta" }, el("h2", {}, titulo),
+                             areaTexto("pre", vista.preambulo, titulo)));
+  }
+
+  const paginas = [];
+  for (let n = 1; n <= inf.paginas; n++) {
+    const d = detalle.get(n) || { veredicto: "", clase: "", hallazgos: [], metricas: {} };
+    const columnaMd = el("div", {});
+    const indices = porAncla.get(n) || [];
+    if (!indices.length) columnaMd.append(el("p", { clase: "tenue" }, "El .md no tiene ancla [[p. " + n + "]]."));
+    for (const i of indices) {
+      columnaMd.append(el("div", { clase: "cabecera-ancla" }, vista.segmentos[i].cabecera),
+                       areaTexto(i, vista.segmentos[i].cuerpo, "Texto .md de la página " + n));
+    }
+    paginas.push(el("article", { clase: "tarjeta pagina " + (CLASE[d.veredicto] || ""), id: "p-" + n },
+      // loading va antes que src: si src llega primero, la imagen empieza a cargar de inmediato.
+      el("div", {}, el("img", { loading: "lazy", src: "/api/doc/" + vista.id + "/pagina/" + n + ".png",
+                                alt: "Página " + n + " del PDF original" })),
+      columnaMd,
+      el("div", {},
+        el("div", {}, el("span", { clase: "etiqueta" }, d.veredicto + " p. " + n), " ",
+           el("span", { clase: "tenue" }, d.clase)),
+        lista(d.hallazgos, "hallazgos"),
+        metricas(d.metricas))));
+  }
+  $("paginas").replaceChildren(...paginas);
+
+  $("extras").replaceChildren();
+  const fuera = [];
+  vista.segmentos.forEach((s, i) => { if (s.ancla < 1 || s.ancla > inf.paginas) fuera.push(i); });
+  if (fuera.length) {
+    $("extras").append(el("div", { clase: "tarjeta" },
+      el("h2", {}, "Anclas que no existen en el original"),
+      ...fuera.flatMap((i) => [el("div", { clase: "cabecera-ancla" }, vista.segmentos[i].cabecera),
+                               areaTexto(i, vista.segmentos[i].cuerpo, vista.segmentos[i].cabecera)])));
+  }
+}
+
+function marcarSucio() {
+  $("sucio").hidden = ediciones.size === 0;
+}
+
+// ───────── arranque ─────────
+
+async function iniciar() {
+  try {
+    config = await pedirJson("GET", "/api/config");
+  } catch (e) {
+    avisar("No se pudo leer la configuración del servidor: " + e.message, true);
+    return;
+  }
+  $("version").textContent = "gate " + config.version_gate;
+  for (const nombre of config.convertidores) $("convertidor").append(el("option", { value: nombre }, nombre));
+  $("modelo").value = config.tokens.modelo_defecto;
+  $("btn-convertir").addEventListener("click", convertir);
+  $("btn-reverificar").addEventListener("click", reverificar);
+  $("archivo-md").addEventListener("change", subirMd);
+  $("btn-md").addEventListener("click", () => descargar("md"));
+  $("btn-informe").addEventListener("click", () => descargar("informe"));
+  $("btn-docx").addEventListener("click", () => descargar("docx"));
+  $("btn-tokens").addEventListener("click", medirTokens);
+  $("solo-problemas").addEventListener("change", (e) => {
+    $("paginas").classList.toggle("solo-problemas", e.target.checked);
+  });
+  avisar("Tope: PDF de " + config.tope_pdf_mb + " MB, .md de " + config.tope_md_mb + " MB.", false);
+}
+
+iniciar();
+</script>
+</body>
+</html>
