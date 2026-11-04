@@ -2,6 +2,7 @@
 banco/trabajo/
 corpus/
 resultados_sprint0/
+defectos/resultados/
 
 # Entorno local de Python
 .venv/
