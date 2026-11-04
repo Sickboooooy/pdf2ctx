@@ -40,6 +40,8 @@ sys.path.insert(0, str(CARPETA_BANCO.parent))  # el kit se importa; nunca se cop
 
 import gate_fidelidad as gate  # noqa: E402
 import probar_gate  # noqa: E402  (rasterizar_pagina: el mutante M11 del kit)
+sys.path.insert(0, str(CARPETA_BANCO))
+import curaduria  # noqa: E402  (quitar_bloques: comprobación independiente del consolidado)
 import pypdfium2 as pdfium  # noqa: E402
 from docx import Document  # noqa: E402
 
@@ -138,7 +140,9 @@ class Banco:
 class Imitador:
     """Imitador local de count_tokens y de la API de mensajes: registra cada petición y nunca sale a la red."""
     BASE, PDF, MD = 12, 1500, 400
-    TRANSCRIPCION, ENTRADA, SALIDA = "TRANSCRIPCIÓN DE PRUEBA · imitador local", 1600, 42
+    NUEVA = "TRANSCRIPCIÓN DE PRUEBA · imitador local"
+    TRANSCRIPCION = f"LEY DEL IMPUESTO AL VALOR AGREGADO\n{NUEVA}\n[Texto en la ilustración: XQZ]"  # dup · nueva · decorativa
+    ENTRADA, SALIDA = 1600, 42
 
     def __init__(self):
         self.peticiones = []
@@ -463,12 +467,12 @@ def probar_con_llave(imitador: Imitador, ruta_pdf: Path, trabajo: Path) -> None:
                   estado == 404 and len(imitador.peticiones) == antes, f"HTTP {estado}")
         estado, _, cuerpo_t = banco.post_json(f"/api/doc/{id_doc}/transcribir/1",
                                               {"confirmado": True, "modelo": "claude-sonnet-5-5"})
-        t = json_de(cuerpo_t)
+        r0 = (json_de(cuerpo_t).get("regiones") or [{}])[0]
         comprobar("con confirmación: devuelve el texto y el uso de tokens que reporta la API",
-                  estado == 200 and t.get("texto") == Imitador.TRANSCRIPCION
-                  and t.get("uso") == {"input_tokens": Imitador.ENTRADA, "output_tokens": Imitador.SALIDA}
-                  and t.get("request_id") == "req_imitador",
-                  f"HTTP {estado} · {t.get('modelo_respuesta')} · uso {t.get('uso')}")
+                  estado == 200 and r0.get("texto") == Imitador.TRANSCRIPCION
+                  and r0.get("uso") == {"input_tokens": Imitador.ENTRADA, "output_tokens": Imitador.SALIDA}
+                  and r0.get("request_id") == "req_imitador",
+                  f"HTTP {estado} · {r0.get('modelo_respuesta')} · {r0.get('modo')} · uso {r0.get('uso')}")
         nuevas = imitador.peticiones[antes:]
         p = nuevas[0] if len(nuevas) == 1 else {}
         bloques = p.get("cuerpo", {}).get("messages", [{}])[0].get("content", [])
@@ -486,12 +490,38 @@ def probar_con_llave(imitador: Imitador, ruta_pdf: Path, trabajo: Path) -> None:
         comprobar("transcribir no toca el .md ni el veredicto del gate (capa aparte)",
                   despues["informe"]["sha256_md"] == antes_vista["informe"]["sha256_md"]
                   and despues["informe"]["codigo_salida"] == antes_vista["informe"]["codigo_salida"]
-                  and despues.get("transcripciones", {}).get("1", {}).get("texto") == Imitador.TRANSCRIPCION,
+                  and "1" in despues.get("transcripciones", {}),
                   f"código {despues['informe']['codigo_salida']} · transcripciones {list(despues.get('transcripciones', {}))}")
+
+        print("\n— Curaduría documental de la transcripción (duplicado · nueva · decorativa)")
+        guardada = trabajo / "con_llave" / id_doc / "transcripciones" / "1.json"
+        huella = hashlib.sha256(guardada.read_bytes()).hexdigest()
+        clases = sorted(e["clase"] for e in despues.get("curaduria", {}).get("registro", []))
+        comprobar("la curaduría clasifica: duplicado y decorativo se excluyen, lo nuevo se incorpora en ámbar",
+                  clases == ["decorativo", "duplicado", "nuevo"]
+                  and all("ámbar" in e["estado"] for e in despues["curaduria"]["registro"] if e["decision"] == "incorporar"),
+                  str(despues.get("curaduria", {}).get("resumen")))
+        estado, _, md_base = banco.get(f"/api/doc/{id_doc}/descargar/md")
+        estado_c, _, consolidado = banco.get(f"/api/doc/{id_doc}/descargar/consolidado")
+        consolidado = consolidado.decode("utf-8")
+        comprobar("consolidado.md: sin sus bloques es byte por byte el .md base; solo trae lo nuevo, delimitado",
+                  estado_c == 200 and curaduria.quitar_bloques(consolidado).encode("utf-8") == md_base
+                  and consolidado.count(Imitador.NUEVA) == 1 and "ilustración" not in consolidado
+                  and "estado=ambar" in consolidado and "request=req_imitador" in consolidado, f"HTTP {estado_c}")
         estado, _, datos_docx = banco.get(f"/api/doc/{id_doc}/descargar/docx")
         texto_docx = "\n".join(par.text for par in Document(io.BytesIO(datos_docx)).paragraphs) if estado == 200 else ""
-        comprobar("el .docx trae la transcripción etiquetada «NO VERIFICADA»",
-                  "NO VERIFICADA" in texto_docx and Imitador.TRANSCRIPCION in texto_docx, f"HTTP {estado}")
+        comprobar("el .docx trae solo el texto nuevo, etiquetado «NO VERIFICADO», sin lo decorativo",
+                  "NO VERIFICADO" in texto_docx and Imitador.NUEVA in texto_docx and "ilustración" not in texto_docx,
+                  f"HTTP {estado}")
+        estado, _, _ = banco.post_json(f"/api/doc/{id_doc}/curaduria/1/0", {"decision": "rechazado"})
+        _, _, sin_fragmento = banco.get(f"/api/doc/{id_doc}/descargar/consolidado")
+        estado_d, _, _ = banco.post_json(f"/api/doc/{id_doc}/curaduria/1/0", {"decision": "pendiente"})
+        _, _, restaurado = banco.get(f"/api/doc/{id_doc}/descargar/consolidado")
+        comprobar("rechazar en revisión humana saca el fragmento; deshacer lo restaura",
+                  estado == 200 and estado_d == 200 and Imitador.NUEVA.encode() not in sin_fragmento
+                  and restaurado.decode("utf-8") == consolidado, f"HTTP {estado} / {estado_d}")
+        comprobar("la transcripción guardada no cambia con la curaduría ni la revisión",
+                  hashlib.sha256(guardada.read_bytes()).hexdigest() == huella)
     finally:
         banco.cerrar()
     registro = banco.registro.read_text(encoding="utf-8")

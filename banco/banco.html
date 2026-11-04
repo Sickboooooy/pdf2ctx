@@ -121,6 +121,14 @@
   .transcripcion pre { margin: 10px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font: .8rem/1.5 var(--f-mono);
                        color: var(--papel); }
   .transcripcion .metricas { margin-top: 8px; }
+  .transcripcion + .transcripcion { margin-top: 10px; }
+  .curaduria { list-style: none; padding: 0; margin: 10px 0; font: .8rem/1.5 var(--f-mono); }
+  .curaduria li { margin-bottom: 4px; overflow-wrap: anywhere; }
+  .curaduria .c-excluir { color: var(--acero); text-decoration: line-through; }
+  .curaduria .c-abstener { color: var(--ambar); }
+  .etiqueta-c { font-size: .68rem; letter-spacing: .05em; text-transform: uppercase; color: var(--acero);
+                text-decoration: none; display: inline-block; margin-right: 6px; }
+  details summary { cursor: pointer; color: var(--acero); font: .78rem var(--f-mono); margin-top: 8px; }
 
   .pie { border-top: 1px solid var(--linea); margin-top: 32px; padding-top: 18px; font: .74rem var(--f-mono);
          letter-spacing: .06em; text-transform: uppercase; color: var(--acero); display: flex; gap: 16px; flex-wrap: wrap; }
@@ -180,6 +188,11 @@
         <button id="btn-informe">Descargar informe.json</button>
         <button id="btn-docx">Descargar .docx</button>
         <span class="causa" id="causa-docx"></span>
+      </div>
+      <div class="fila">
+        <button id="btn-consolidado">Descargar consolidado.md</button>
+        <button id="btn-curaduria">Descargar curaduria.json</button>
+        <span class="causa">Consolidado = .md base + texto de imágenes curado, delimitado y en ámbar (el .md base no cambia).</span>
       </div>
       <div class="fila">
         <button id="btn-tokens">Medir tokens</button>
@@ -407,7 +420,8 @@ function pintarResumen() {
       dato("Gate del kit (antes de los refuerzos)", kit),
       dato("Clases de oráculo", clases),
       dato("Residuo G3 (líneas repetidas)", residuo),
-      dato("Gate", inf.gate + " " + inf.version)),
+      dato("Gate", inf.gate + " " + inf.version),
+      resumenCuraduria()),
     el("div", { clase: "rejilla" },
       el("div", {}, el("span", { clase: "dato" }, "sha256 del PDF"), el("span", { clase: "mono" }, inf.sha256_pdf)),
       el("div", {}, el("span", { clase: "dato" }, "sha256 del .md"), el("span", { clase: "mono" }, inf.sha256_md))),
@@ -419,6 +433,16 @@ function pintarResumen() {
       ? el("div", { clase: "saltos" }, ...problemas.slice(0, 300).map((d) =>
           el("a", { href: "#p-" + d.pagina, clase: "chip " + (CLASE[d.veredicto] || "") }, "p. " + d.pagina)))
       : null);
+}
+
+function resumenCuraduria() {
+  const c = vista.curaduria || {};
+  if (c.error) return dato("Curaduría", "⚠ " + c.error);
+  if (!(c.registro || []).length) return null;
+  const r = c.resumen || {};
+  return dato("Curaduría del texto en imágenes (" + c.version + ")",
+              (r.incorporar || 0) + " líneas incorporadas (ámbar) · " + (r.excluir || 0) + " excluidas · " +
+              (r.abstener || 0) + " abstenciones · integridad del consolidado " + (c.integridad ? "✓" : "✗"));
 }
 
 function pintarAcciones() {
@@ -441,12 +465,45 @@ function pintarAcciones() {
   }
 }
 
+// Vuelve a pedir la vista (transcripciones + curaduría) y repinta solo las páginas indicadas.
+async function refrescarCuraduria(paginas) {
+  const nueva = await pedirJson("GET", "/api/doc/" + vista.id);
+  vista.transcripciones = nueva.transcripciones;
+  vista.curaduria = nueva.curaduria;
+  for (const n of paginas) {
+    const anterior = $("tr-" + n);
+    if (anterior) anterior.replaceWith(cajaTranscripcion(n, vista.informe.detalle.find((x) => x.pagina === n)));
+  }
+  pintarResumen();
+}
+
+function revisar(n, i, decision) {
+  tarea("Guardando la revisión…", async () => {
+    await pedirJson("POST", "/api/doc/" + vista.id + "/curaduria/" + n + "/" + i,
+                    JSON.stringify({ decision: decision }), "application/json");
+    await refrescarCuraduria([n]);
+    avisar("Revisión guardada (p. " + n + ", región " + (i + 1) + "): " + decision +
+           ". El texto sigue en ámbar: no verificado por el gate.", false);
+  });
+}
+
+// Una transcripción guardada tiene regiones; las de la primera versión eran de página entera («legado»).
+function regionesDe(t) {
+  return t.regiones || [{ region: null, modo: "pagina_completa (legado)", texto: t.texto,
+                          modelo_respuesta: t.modelo_respuesta, request_id: t.request_id, uso: t.uso }];
+}
+
+function usoDe(t) {
+  return regionesDe(t).reduce((s, r) => ({ e: s.e + ((r.uso || {}).input_tokens || 0),
+                                          s: s.s + ((r.uso || {}).output_tokens || 0) }), { e: 0, s: 0 });
+}
+
 // Uso real (reportado por la API) de las páginas ya transcritas: referencia antes de autorizar un lote.
 function referenciaDeUso() {
   const hechas = Object.values(vista.transcripciones || {});
   if (!hechas.length) return "Aún no hay páginas transcritas en este documento para tomar como referencia.";
-  const entrada = Math.round(hechas.reduce((s, t) => s + t.uso.input_tokens, 0) / hechas.length);
-  const salida = Math.round(hechas.reduce((s, t) => s + t.uso.output_tokens, 0) / hechas.length);
+  const entrada = Math.round(hechas.reduce((s, t) => s + usoDe(t).e, 0) / hechas.length);
+  const salida = Math.round(hechas.reduce((s, t) => s + usoDe(t).s, 0) / hechas.length);
   return "Referencia real: las " + hechas.length + " página(s) ya transcritas usaron en promedio " + entrada +
          " tokens de entrada y " + salida + " de salida por página.";
 }
@@ -463,16 +520,38 @@ function paginasPendientes() {
   return vista.informe.detalle.filter((d) => esMarcada(d) && !hechas[String(d.pagina)]).map((d) => d.pagina);
 }
 
+const DECISION = { incorporar: "incorporado · ámbar", excluir: "excluido", abstener: "abstención" };
+
+// Cada región transcrita con lo que decidió la curaduría (curaduria.py) y la revisión humana. Nada aquí es verde.
 function cajaTranscripcion(n, d) {
   const caja = el("div", { id: "tr-" + n });
   const t = (vista.transcripciones || {})[String(n)];
   if (t) {
-    caja.append(el("div", { clase: "transcripcion" },
-      el("span", { clase: "chip v-ambar" }, "Transcripción asistida · no verificada"),
-      el("div", { clase: "metricas" }, t.modelo_respuesta + (t.fallback ? " (fallback)" : "") +
-        " · entrada " + t.uso.input_tokens + " · salida " + t.uso.output_tokens + " tokens" +
-        (t.truncada ? " · TRUNCADA" : "") + (t.request_id ? " · " + t.request_id : "")),
-      el("pre", {}, t.texto || "(sin texto)")));
+    const registro = ((vista.curaduria || {}).registro || []).filter((e) => e.pagina === n);
+    regionesDe(t).forEach((reg, i) => {
+      const lineas = registro.filter((e) => e.indice_region === i);
+      const humana = lineas.find((e) => e.actor === "revisión humana");
+      const botones = el("div", { clase: "fila" });
+      for (const [decision, texto] of [["cotejado", "Cotejado contra la imagen"], ["rechazado", "Rechazar"],
+                                       ["pendiente", "Deshacer"]]) {
+        const boton = el("button", {}, texto);
+        boton.addEventListener("click", () => revisar(n, i, decision));
+        botones.append(boton);
+      }
+      caja.append(el("div", { clase: "transcripcion" },
+        el("span", { clase: "chip v-ambar" }, "Texto en imagen · no verificado"),
+        el("div", { clase: "metricas" },
+          (reg.region ? "región " + reg.region.map(Math.round).join(",") : "página completa") + " · " +
+          (reg.modo || "") + " · " + reg.modelo_respuesta + " · entrada " + ((reg.uso || {}).input_tokens || 0) +
+          " · salida " + ((reg.uso || {}).output_tokens || 0) + (reg.request_id ? " · " + reg.request_id : "")),
+        el("ul", { clase: "curaduria" }, ...lineas.map((e) => el("li", { clase: "c-" + e.decision, title: e.motivo },
+          el("span", { clase: "etiqueta-c" }, DECISION[e.decision] + (e.clase !== "nuevo" ? " · " + e.clase : "")),
+          e.linea || "(sin texto legible)"))),
+        el("div", { clase: "metricas" }, humana ? "Revisión humana: " + humana.estado
+          : "Sin revisión humana: lo incorporado queda pendiente de cotejo."),
+        botones,
+        el("details", {}, el("summary", {}, "Transcripción original (sin curar)"), el("pre", {}, reg.texto || ""))));
+    });
   } else if (esMarcada(d) && config.transcripcion.disponible) {
     const boton = el("button", {}, "Transcribir esta página con Claude");
     boton.addEventListener("click", () => transcribir([n]));
@@ -505,11 +584,8 @@ function transcribir(paginas) {
         throw new Error("p. " + n + ": " + e.message + " — se transcribieron " + hechas + " de " + paginas.length +
                         ". El botón general retoma solo las pendientes.");
       }
-      vista.transcripciones = vista.transcripciones || {};
-      vista.transcripciones[String(n)] = t;
-      entrada += t.uso.input_tokens; salida += t.uso.output_tokens; hechas += 1;
-      const anterior = $("tr-" + n);
-      if (anterior) anterior.replaceWith(cajaTranscripcion(n, vista.informe.detalle.find((x) => x.pagina === n)));
+      entrada += usoDe(t).e; salida += usoDe(t).s; hechas += 1;
+      await refrescarCuraduria([n]);
     }
     pintarAcciones();
     avisar("Transcritas " + hechas + " página(s) · entrada " + entrada + " · salida " + salida +
@@ -626,6 +702,8 @@ async function iniciar() {
   $("btn-md").addEventListener("click", () => descargar("md"));
   $("btn-informe").addEventListener("click", () => descargar("informe"));
   $("btn-docx").addEventListener("click", () => descargar("docx"));
+  $("btn-consolidado").addEventListener("click", () => descargar("consolidado"));
+  $("btn-curaduria").addEventListener("click", () => descargar("curaduria"));
   $("btn-tokens").addEventListener("click", medirTokens);
   for (const boton of document.querySelectorAll(".btn-lote")) {
     boton.addEventListener("click", () => transcribir(paginasPendientes()));

@@ -85,6 +85,32 @@ pueden mandar a Claude para leer ese texto. Lo hace `banco/transcripcion.py` con
 
 Requiere la llave (`--llavero`) y la dependencia: `.venv/bin/python -m pip install "anthropic>=1,<2"`.
 
+En páginas con capa de texto solo se manda **el recorte de cada imagen grande** (R8), así Claude no ve ni copia
+el texto que ya está en la página. Sin capa de texto, o con una capa OCR previa, se manda la página completa.
+
+### Curaduría documental antes de exportar (`banco/curaduria.py`)
+
+No modifica el PDF, el `.md` base ni las transcripciones guardadas. Cada línea transcrita se compara contra el
+texto de su página:
+
+| Clase | Decisión |
+|---|---|
+| nuevo, cotejable contra la imagen | incorporar al consolidado, **en ámbar, pendiente de cotejo** |
+| duplicado (ya está en la página o se repite) | excluir |
+| decorativo (notas y descripciones del modelo) | excluir |
+| incierto (`[ilegible]`, demasiado corto, o con cifras que contradicen la capa de texto u OCR) | abstenerse (ámbar) |
+
+- **`consolidado.md`** es independiente del `.md` base: lleva bloques `<!-- pdf2ctx:asistido p=… region=…
+  metodo=… request=… estado=ambar cotejo=… -->`. Al quitarlos queda, **byte por byte**, el `.md` base; si el
+  `.md` base ya trae ese marcador, no se consolida.
+- **`curaduria.json`** registra cada incorporación, exclusión y abstención con su página, región, método,
+  `request_id`, motivo, estado y actor.
+- **Revisión humana** por región: «Cotejado contra la imagen», «Rechazar» o «Deshacer». Se guarda aparte
+  (`curaduria_revision.json`). El cotejo humano **no da verde**: queda «ámbar · cotejado, no verificado por el
+  gate», y el veredicto de la página no cambia.
+- El `.docx` incluye solo lo incorporado, etiquetado «NO VERIFICADO».
+- Regresión: `.venv/bin/python banco/probar_curaduria.py` (21 casos, sin red).
+
 Dependencias nuevas: python-docx 1.2.0 (MIT, trae lxml BSD-3 y typing_extensions PSF), Pillow 13.0.0
 (MIT-CMU) y anthropic 1.17.0 (MIT; su árbol completo es MIT, BSD-3, Apache-2.0 o PSF). Nada GPL ni AGPL.
 
