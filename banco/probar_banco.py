@@ -360,6 +360,10 @@ def probar_sin_llave(banco: Banco, imitador: Imitador, ruta_pdf: Path, trabajo: 
               vista_roja.get("docx", {}).get("causa", ""))
     estado, _, cuerpo = banco.get(f"/api/doc/{id_doc}/descargar/docx")
     comprobar("con 🔴 la exportación .docx se bloquea → 409", estado == 409, json_de(cuerpo).get("error", f"HTTP {estado}"))
+    bloqueados = {f: banco.get(f"/api/doc/{id_doc}/exportar/{f}")[0] for f in ("docx", "gdocs", "txt", "html")}
+    libres = {f: banco.get(f"/api/doc/{id_doc}/exportar/{f}")[0] for f in ("md", "json")}
+    comprobar("con 🔴 se bloquean Word, Google Docs, texto y web (409); Markdown y evidencia siguen disponibles",
+              set(bloqueados.values()) == {409} and set(libres.values()) == {200}, f"{bloqueados} · {libres}")
 
     print("\n— .md externo verificado contra el mismo PDF")
     estado, _, cuerpo = banco.post(f"/api/doc/{id_doc}/md?nombre=externo.md", b"\xff\xfe\x00no utf8", "text/markdown")
@@ -522,6 +526,30 @@ def probar_con_llave(imitador: Imitador, ruta_pdf: Path, trabajo: Path) -> None:
                   and restaurado.decode("utf-8") == consolidado, f"HTTP {estado} / {estado_d}")
         comprobar("la transcripción guardada no cambia con la curaduría ni la revisión",
                   hashlib.sha256(guardada.read_bytes()).hexdigest() == huella)
+
+        print("\n— Exportación en varios formatos (documento final = verificado + curado en ámbar)")
+        salidas = {f: banco.get(f"/api/doc/{id_doc}/exportar/{f}") for f in ("txt", "html", "gdocs", "md", "json")}
+        txt = salidas["txt"][2].decode("utf-8")
+        comprobar("texto (.txt): marca por página, el texto nuevo etiquetado «NO VERIFICADO», sin lo decorativo",
+                  salidas["txt"][0] == 200 and txt.count("──── p. ") == antes_vista["informe"]["paginas"]
+                  and Imitador.NUEVA in txt and "NO VERIFICADO" in txt and "ilustración" not in txt)
+        pagina_web = salidas["html"][2].decode("utf-8")
+        comprobar("página web (.html): autocontenida, sin scripts, con el texto nuevo en ámbar",
+                  salidas["html"][0] == 200 and salidas["html"][1].get("content-type", "").startswith("text/html")
+                  and "<script" not in pagina_web and "http" not in pagina_web.split("</title>")[0]
+                  and Imitador.NUEVA in pagina_web and "NO VERIFICADO" in pagina_web)
+        try:
+            gdocs = "\n".join(p.text for p in Document(io.BytesIO(salidas["gdocs"][2])).paragraphs)
+        except Exception:
+            gdocs = ""
+        comprobar("Google Docs: .docx que abre con python-docx y trae el texto nuevo etiquetado",
+                  salidas["gdocs"][0] == 200 and Imitador.NUEVA in gdocs and "NO VERIFICADO" in gdocs,
+                  salidas["gdocs"][1].get("content-disposition", ""))
+        comprobar("Markdown: es el consolidado; evidencia (.json): informe del gate + registro de curaduría",
+                  salidas["md"][0] == 200 and salidas["md"][2].decode("utf-8") == consolidado
+                  and {"informe", "curaduria"} <= set(json_de(salidas["json"][2])))
+        estado, _, _ = banco.get(f"/api/doc/{id_doc}/exportar/pdf")
+        comprobar("un formato desconocido → 400", estado == 400, f"HTTP {estado}")
     finally:
         banco.cerrar()
     registro = banco.registro.read_text(encoding="utf-8")

@@ -545,6 +545,108 @@ def construir_docx(informe: dict, nombre_pdf: str, preambulo: str, segmentos: li
     return buffer.getvalue()
 
 
+# ───────────────────────── exportación en varios formatos ─────────────────────────
+# Todos parten del mismo «documento final»: el .md base verificado + lo que la curaduría incorporó (ámbar,
+# NO verificado). Con 🔴 se bloquean los formatos de lectura; con 🟡 llevan «PÁGINAS NO VERIFICADAS».
+
+TIPO_DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+FORMATOS = {  # formato → (tipo MIME, sufijo del archivo, ¿es de lectura?)
+    "docx": (TIPO_DOCX, ".docx", True),
+    "gdocs": (TIPO_DOCX, ".para-google-docs.docx", True),
+    "txt": ("text/plain; charset=utf-8", ".txt", True),
+    "html": ("text/html; charset=utf-8", ".html", True),
+    "md": ("text/markdown; charset=utf-8", ".consolidado.md", False),
+    "json": ("application/json; charset=utf-8", ".evidencia.json", False),
+}
+
+
+def documento_final(carpeta: Path) -> dict:
+    with CANDADO:
+        informe = guardar_y_verificar(carpeta)   # veredicto fresco del gate sobre el .md guardado
+        texto_md = leer_md(carpeta)
+        preambulo, segmentos = segmentos_md(texto_md)
+        meta = leer_json(carpeta / "meta.json")
+        cura = estado_curaduria(carpeta)
+    paginas = {}
+    for s in segmentos:
+        paginas.setdefault(s["ancla"], []).append(s["cuerpo"])
+    return {"informe": informe, "md": texto_md, "preambulo": preambulo, "segmentos": segmentos, "meta": meta,
+            "cura": cura, "paginas": {n: "".join(c) for n, c in paginas.items()},
+            "incorporados": curaduria.incorporados_por_pagina(cura["registro"]),
+            "giradas": {d["pagina"]: d["rotacion"] for d in informe["detalle"] if d.get("rotacion")},
+            "pendientes": [d["pagina"] for d in informe["detalle"] if d["veredicto"] == gate.AMARILLO]}
+
+
+def construir_texto(f: dict) -> str:
+    inf = f["informe"]
+    lineas = [f["meta"]["nombre_pdf"], f"sha256 del PDF: {inf['sha256_pdf']}",
+              f"Veredicto del gate: {inf['veredicto']} (código {inf['codigo_salida']})"]
+    if inf["veredicto"] == gate.AMARILLO:
+        lineas.append("PÁGINAS NO VERIFICADAS: " + rangos(f["pendientes"]))
+    lineas.append("")
+    if f["preambulo"].strip():
+        lineas += ["Texto antes de [[p. 1]] (no atribuible a una página):", f["preambulo"].strip(), ""]
+    for n in range(1, inf["paginas"] + 1):
+        lineas.append(f"──────── p. {n} ────────" + (f"  (girada {f['giradas'][n]}° en el original)"
+                                                       if n in f["giradas"] else ""))
+        lineas += [x.rstrip() for x in f["paginas"].get(n, "").strip("\n").splitlines()]
+        for region, metodo, estado, frag in f["incorporados"].get(n, []):
+            lineas.append(f"[Texto en imagen · asistido por IA ({metodo}) · región {region} · {estado} — NO VERIFICADO]")
+            lineas += [f"  │ {x}" for x in frag]
+        lineas.append("")
+    return "\n".join(lineas)
+
+
+def construir_html(f: dict) -> str:
+    import html as h
+    inf = f["informe"]
+    aviso = (f'<p class="aviso">PÁGINAS NO VERIFICADAS: {h.escape(rangos(f["pendientes"]))}</p>'
+             if inf["veredicto"] == gate.AMARILLO else "")
+    partes = []
+    for n in range(1, inf["paginas"] + 1):
+        giro = f" · girada {f['giradas'][n]}° en el original" if n in f["giradas"] else ""
+        cuerpo = h.escape(f["paginas"].get(n, "").strip("\n"))
+        bloques = "".join(
+            f'<blockquote><b>Texto en imagen · asistido por IA ({h.escape(metodo)}) · región {h.escape(region)} · '
+            f'{h.escape(estado)} — NO VERIFICADO</b><br>' + "<br>".join(h.escape(x) for x in frag) + "</blockquote>"
+            for region, metodo, estado, frag in f["incorporados"].get(n, []))
+        partes.append(f'<section><p class="marca">p. {n}{h.escape(giro)}</p><pre>{cuerpo}</pre>{bloques}</section>')
+    return ("<!doctype html><html lang=\"es\"><head><meta charset=\"utf-8\">"
+            f"<title>{h.escape(f['meta']['nombre_pdf'])}</title><style>"
+            "body{font:15px/1.55 Georgia,serif;max-width:820px;margin:32px auto;padding:0 16px;color:#111}"
+            "pre{white-space:pre-wrap;font:inherit}.marca{font:600 12px/1 monospace;color:#666;border-top:1px solid #ccc;"
+            "padding-top:12px;margin-top:28px}.aviso{color:#b00020;font-weight:700}blockquote{border-left:4px solid "
+            "#E8B33A;background:#fdf6e3;margin:12px 0;padding:8px 12px;font-style:italic}small{color:#666}"
+            f"</style></head><body><h1>{h.escape(f['meta']['nombre_pdf'])}</h1><small>sha256 del PDF "
+            f"{inf['sha256_pdf']} · veredicto del gate {inf['veredicto']} (código {inf['codigo_salida']})</small>"
+            + aviso + "".join(partes) + "</body></html>")
+
+
+def exportar(carpeta: Path, formato: str):
+    """(bytes, tipo MIME, nombre de archivo) del documento final en el formato pedido."""
+    if formato not in FORMATOS:
+        raise ErrorBanco(400, f"Formato desconocido: {formato}")
+    tipo, sufijo, de_lectura = FORMATOS[formato]
+    f = documento_final(carpeta)
+    nombre = nombre_descarga(f["meta"]["nombre_pdf"], sufijo)
+    if formato == "json":
+        datos = {"informe": f["informe"], "curaduria": {k: v for k, v in f["cura"].items() if k != "consolidado"},
+                 "meta": f["meta"]}
+        return json.dumps(datos, ensure_ascii=False, indent=2).encode("utf-8"), tipo, nombre
+    if formato == "md":
+        return (f["cura"].get("consolidado") or f["md"]).encode("utf-8"), tipo, nombre
+    permitido, causa = politica_docx(f["informe"], f["segmentos"])
+    if de_lectura and not permitido:
+        raise ErrorBanco(409, causa.replace(".docx", "documento de lectura"))
+    if formato in ("docx", "gdocs"):
+        datos = construir_docx(f["informe"], f["meta"]["nombre_pdf"], f["preambulo"], f["segmentos"], f["incorporados"])
+    elif formato == "txt":
+        datos = construir_texto(f).encode("utf-8")
+    else:
+        datos = construir_html(f).encode("utf-8")
+    return datos, tipo, nombre
+
+
 def exportar_docx(carpeta: Path):
     with CANDADO:
         informe = guardar_y_verificar(carpeta)  # veredicto fresco del gate sobre el .md guardado
@@ -723,6 +825,9 @@ class Manejador(BaseHTTPRequestHandler):
                 return self.responder_json(200, subir_md_externo(carpeta, self.leer_cuerpo(TOPE_TEXTO), consulta))
             if metodo == "POST" and accion == ["tokens"]:
                 return self.responder_json(200, medir(carpeta, self.leer_cuerpo(TOPE_TEXTO)))
+            if metodo == "GET" and len(accion) == 2 and accion[0] == "exportar":
+                datos, tipo, nombre = exportar(carpeta, accion[1])
+                return self.descargar(datos, tipo, nombre)
             if metodo == "GET" and accion == ["descargar", "consolidado"]:
                 cura = estado_curaduria(carpeta)
                 if not cura.get("consolidado"):

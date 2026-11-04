@@ -23,6 +23,7 @@
     --margen: clamp(16px, 4vw, 40px);
   }
   * { box-sizing: border-box; }
+  [hidden] { display: none !important; }   /* que .fila (display:flex) no anule el atributo hidden */
   html { background: var(--tinta); }
   body { margin: 0; background: var(--tinta); color: var(--papel); font: 15px/1.5 var(--f-cuerpo);
          -webkit-font-smoothing: antialiased; }
@@ -116,6 +117,37 @@
   .metricas { font: .78rem var(--f-mono); color: var(--acero); overflow-wrap: anywhere; }
   .metricas div + div { margin-top: 4px; }
   .solo-problemas .pagina.v-verde { display: none; }
+  .pasos { display: flex; gap: 10px; flex-wrap: wrap; list-style: none; padding: 0; margin: 18px 0 0; }
+  .pasos li { display: inline-flex; align-items: center; gap: 8px; font: .8rem var(--f-mono); letter-spacing: .04em;
+              color: var(--acero); border: 1px solid var(--linea); border-radius: 999px; padding: 6px 14px 6px 6px; }
+  .pasos li b { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%;
+                background: var(--noche-2); color: var(--acero); font-weight: 600; }
+  .pasos li.activo { color: var(--papel); border-color: var(--cian); }
+  .pasos li.activo b { background: var(--cian); color: var(--tinta); }
+  .pasos li.hecho b { background: var(--verde); color: var(--tinta); }
+  .rejilla-acciones { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap: 16px; }
+  .rejilla-acciones .tarjeta { margin-bottom: 0; }
+  .rejilla-acciones + * { margin-top: 16px; }
+  .formatos { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 12px 0 6px; }
+  .formatos button { flex-direction: column; align-items: flex-start; border-radius: 12px; padding: 12px 14px; }
+  .formatos button span { font: .72rem var(--f-mono); color: var(--acero); font-weight: 400; }
+  .interruptor { display: flex; gap: 8px; align-items: center; margin-top: 14px; }
+  details.avanzado summary { cursor: pointer; font: .78rem var(--f-mono); letter-spacing: .06em;
+                             text-transform: uppercase; color: var(--acero); }
+  details.avanzado[open] summary { margin-bottom: 12px; }
+  .contadores { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 16px; }
+  .contador { border: 1px solid var(--linea); border-radius: 12px; padding: 10px 16px; min-width: 150px; }
+  .contador b { display: block; font: 1.6rem/1.1 var(--f-display); }
+  .contador.v-verde b { color: var(--verde); } .contador.v-ambar b { color: var(--ambar); }
+  .contador.v-lacre b { color: var(--lacre); }
+  .acciones-globales { display: inline-flex; gap: 8px; }
+  .acciones-globales button { padding: 7px 14px; font-size: .85rem; }
+  .sucio { border: 1px solid var(--ambar); border-radius: var(--radio); padding: 12px 16px; margin-bottom: 16px;
+           background: var(--ambar-suave); }
+  @media (max-width: 900px) {
+    .rejilla-acciones { grid-template-columns: minmax(0, 1fr); }
+    .formatos { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
   [id^="tr-"] { margin-top: 14px; }
   .transcripcion { padding: 12px 14px; border: 1px dashed var(--ambar); border-radius: 10px; background: var(--ambar-suave); }
   .transcripcion pre { margin: 10px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font: .8rem/1.5 var(--f-mono);
@@ -147,6 +179,10 @@
     </span>
     <span class="producto">pdf2ctx · banco de pruebas</span>
     <div class="derecha">
+      <span class="acciones-globales" id="acciones-globales" hidden>
+        <button class="btn-lote primario">Transcribir imágenes</button>
+        <button id="btn-ir-exportar">Exportar</button>
+      </span>
       <span class="chip cian">local · 127.0.0.1</span>
       <span class="chip" id="version">gate</span>
     </div>
@@ -156,16 +192,24 @@
 <main>
   <section class="portada">
     <h1>Si el .md no se valida contra el PDF, <em>no pasa.</em></h1>
-    <p>PDF → .md con anclas [[p. N]] → .docx de lectura. Cada veredicto lo da el gate; esta página solo lo muestra.</p>
+    <p>Sube un PDF: el gate verifica cada página contra el original, Claude puede leer el texto de las imágenes y
+      tú decides qué entra al documento final.</p>
+    <ol class="pasos">
+      <li id="paso-1" class="activo"><b>1</b>Cargar el PDF</li>
+      <li id="paso-2"><b>2</b>Completar y revisar</li>
+      <li id="paso-3"><b>3</b>Exportar</li>
+    </ol>
   </section>
 
   <section class="tarjeta">
-    <p class="etiqueta-seccion">Paso 1 · PDF original</p>
+    <p class="etiqueta-seccion">1 · Cargar el PDF</p>
     <div class="fila">
       <input type="file" id="archivo-pdf" accept="application/pdf,.pdf">
-      <label>Convertidor <select id="convertidor"></select></label>
       <button class="primario" id="btn-convertir">Convertir y verificar</button>
     </div>
+    <details class="avanzado"><summary>Opciones avanzadas</summary>
+      <div class="fila"><label>Convertidor <select id="convertidor"></select></label></div>
+    </details>
   </section>
 
   <p id="mensaje" role="status" aria-live="polite"></p>
@@ -173,26 +217,41 @@
   <section id="documento" hidden>
     <div class="tarjeta" id="resumen"></div>
 
-    <div class="tarjeta">
-      <p class="etiqueta-seccion">Paso 2 · Verificar y exportar</p>
-      <div class="fila">
-        <button id="btn-reverificar">Re-verificar el .md</button>
-        <span class="sucio" id="sucio" hidden>⚠ Hay cambios sin verificar: el veredicto mostrado es el anterior y
-          las descargas usan el último .md verificado.</span>
+    <div class="fila sucio" id="sucio" hidden>
+      <span>⚠ Editaste el .md: el veredicto mostrado es el anterior y la exportación usa el último .md verificado.</span>
+      <button class="primario" id="btn-reverificar">Re-verificar ahora</button>
+    </div>
+
+    <div class="rejilla-acciones">
+      <div class="tarjeta">
+        <p class="etiqueta-seccion">2 · Completar y revisar</p>
+        <p class="tenue">Claude lee el texto de las imágenes; la curaduría quita lo duplicado y lo dudoso. Revisa las
+          páginas marcadas y confirma cada fragmento contra la imagen.</p>
+        <button id="btn-transcribir" class="btn-lote primario">Transcribir imágenes con Claude</button>
+        <p class="causa causa-lote" id="causa-transcribir"></p>
+        <label class="interruptor"><input type="checkbox" id="solo-problemas" checked> Ver solo las páginas que
+          requieren atención</label>
       </div>
-      <div class="fila">
-        <label>.md externo (Docling u otro) <input type="file" id="archivo-md" accept=".md,text/markdown,text/plain"></label>
+      <div class="tarjeta" id="exportar">
+        <p class="etiqueta-seccion">3 · Exportar el documento final</p>
+        <p class="tenue">Texto verificado + texto de imágenes curado (en ámbar, NO verificado).</p>
+        <div class="formatos">
+          <button data-formato="docx"><b>Word</b><span>.docx paginado</span></button>
+          <button data-formato="gdocs"><b>Google Docs</b><span>.docx para Drive</span></button>
+          <button data-formato="txt"><b>Texto</b><span>.txt</span></button>
+          <button data-formato="md"><b>Markdown</b><span>.md consolidado</span></button>
+          <button data-formato="html"><b>Página web</b><span>.html</span></button>
+          <button data-formato="json"><b>Evidencia</b><span>informe + curaduría</span></button>
+        </div>
+        <p class="causa" id="causa-exportar"></p>
       </div>
+    </div>
+
+    <details class="tarjeta avanzado">
+      <summary>Herramientas avanzadas</summary>
       <div class="fila">
-        <button id="btn-md">Descargar .md</button>
-        <button id="btn-informe">Descargar informe.json</button>
-        <button id="btn-docx">Descargar .docx</button>
-        <span class="causa" id="causa-docx"></span>
-      </div>
-      <div class="fila">
-        <button id="btn-consolidado">Descargar consolidado.md</button>
-        <button id="btn-curaduria">Descargar curaduria.json</button>
-        <span class="causa">Consolidado = .md base + texto de imágenes curado, delimitado y en ámbar (el .md base no cambia).</span>
+        <label>Verificar un .md externo (Docling u otro) <input type="file" id="archivo-md"
+          accept=".md,text/markdown,text/plain"></label>
       </div>
       <div class="fila">
         <button id="btn-tokens">Medir tokens</button>
@@ -200,19 +259,12 @@
         <span class="causa" id="causa-tokens"></span>
       </div>
       <div id="resultado-tokens" class="metricas"></div>
-      <div class="fila">
-        <button id="btn-transcribir" class="btn-lote">Transcribir imágenes con Claude</button>
-        <span class="causa causa-lote" id="causa-transcribir"></span>
-      </div>
-    </div>
+    </details>
 
-    <div class="tarjeta fila">
-      <label><input type="checkbox" id="solo-problemas"> Mostrar solo páginas que no están verificadas</label>
-      <button class="btn-lote">Transcribir imágenes con Claude</button>
-      <span class="causa causa-lote"></span>
-    </div>
     <div id="preambulo"></div>
-    <div id="paginas"></div>
+    <div id="paginas" class="solo-problemas"></div>
+    <p class="tenue" id="sin-pendientes" hidden>Todas las páginas están verificadas. Desmarca «Ver solo las páginas
+      que requieren atención» para verlas.</p>
     <div id="extras"></div>
   </section>
 
@@ -344,8 +396,8 @@ function subirMd() {
 }
 
 function descargar(tipo) {
-  tarea("Preparando la descarga…", async () => {
-    const respuesta = await pedir("GET", "/api/doc/" + vista.id + "/descargar/" + tipo);
+  return tarea("Preparando la descarga…", async () => {
+    const respuesta = await pedir("GET", "/api/doc/" + vista.id + "/" + tipo);
     if (!respuesta.ok) throw new Error(await errorDe(respuesta));
     const disposicion = respuesta.headers.get("Content-Disposition") || "";
     const nombre = (/filename="([^"]+)"/.exec(disposicion) || [])[1] || "documento";
@@ -356,6 +408,14 @@ function descargar(tipo) {
     enlace.remove();
     setTimeout(() => URL.revokeObjectURL(url), 10000);
     avisar("Descargado: " + nombre, false);
+  });
+}
+
+function exportarFormato(formato) {
+  descargar("exportar/" + formato).then(() => {
+    if (formato === "gdocs" && $("mensaje").className !== "error") {
+      avisar("Listo. Para Google Docs: súbelo a Google Drive y elige «Abrir con › Documentos de Google».", false);
+    }
   });
 }
 
@@ -380,6 +440,11 @@ function mostrar(datos) {
   ediciones.clear();
   history.replaceState(null, "", "#doc=" + datos.id);   // recargar la página reabre este documento
   $("documento").hidden = false;
+  $("acciones-globales").hidden = false;
+  const hayProblemas = datos.informe.detalle.some((d) => d.veredicto !== "🟢");
+  $("solo-problemas").checked = hayProblemas;
+  $("paginas").classList.toggle("solo-problemas", hayProblemas);
+  $("sin-pendientes").hidden = true;
   pintarResumen();
   pintarAcciones();
   pintarPaginas();
@@ -395,44 +460,49 @@ function lista(elementos, clase) {
   return el("ul", { clase: clase }, ...elementos.map((t) => el("li", {}, t)));
 }
 
+function contador(valor, texto, clase) {
+  return el("div", { clase: "contador " + clase }, el("b", {}, String(valor)), texto);
+}
+
 function pintarResumen() {
   const inf = vista.informe;
   const r = inf.resumen;
   const clases = Object.entries(inf.clases_oraculo).map(([k, v]) => k + ": " + v).join(" · ");
   const residuo = inf.eficiencia.residuo_pct === null ? "—" : inf.eficiencia.residuo_pct + " %";
   const problemas = inf.detalle.filter((d) => d.veredicto !== "🟢");
-  const kit = inf.kit
-    ? chipEstado(inf.kit.veredicto, (NOMBRE[inf.kit.veredicto] || "") + " · código " + inf.kit.codigo_salida)
-    : "—";
+  const kit = inf.kit ? chipEstado(inf.kit.veredicto, (NOMBRE[inf.kit.veredicto] || "") + " · código " +
+                                   inf.kit.codigo_salida) : "—";
   const retiros = (vista.retiros || []).map((x) => "p. " + x.pagina + " · «" + x.texto.slice(0, 90) +
                                                    (x.texto.length > 90 ? "…" : "") + "» — " + x.motivo);
-
   $("resumen").className = "tarjeta " + (CLASE[inf.veredicto] || "");
   reemplazar($("resumen"),
-    el("p", { clase: "etiqueta-seccion" }, "Veredicto del gate"),
+    el("p", { clase: "etiqueta-seccion" }, "Resultado del gate · " + vista.nombre_pdf),
     el("div", { clase: "fila" },
       el("span", { clase: "veredicto" }, NOMBRE[inf.veredicto] || inf.veredicto),
       chipEstado(inf.veredicto, "código " + inf.codigo_salida)),
-    el("div", { clase: "rejilla" },
-      dato("Documento", vista.nombre_pdf),
-      dato("Origen del .md", vista.origen_md),
-      dato("Páginas", inf.paginas + " · " + r.verde + " 🟢 · " + r.amarillo + " 🟡 · " + r.rojo + " 🔴"),
-      dato("Gate del kit (antes de los refuerzos)", kit),
-      dato("Clases de oráculo", clases),
-      dato("Residuo G3 (líneas repetidas)", residuo),
-      dato("Gate", inf.gate + " " + inf.version),
-      resumenCuraduria()),
-    el("div", { clase: "rejilla" },
-      el("div", {}, el("span", { clase: "dato" }, "sha256 del PDF"), el("span", { clase: "mono" }, inf.sha256_pdf)),
-      el("div", {}, el("span", { clase: "dato" }, "sha256 del .md"), el("span", { clase: "mono" }, inf.sha256_md))),
+    el("div", { clase: "contadores" },
+      contador(r.verde, "páginas verificadas", "v-verde"),
+      contador(r.amarillo, "requieren confirmación", "v-ambar"),
+      contador(r.rojo, "no pasan", "v-lacre")),
+    el("div", { clase: "rejilla" }, resumenCuraduria()),
     lista(inf.errores_documento.map((e) => "🔴 " + e), "lista errores"),
-    lista(inf.avisos, "lista avisos"),
-    retiros.length ? el("div", {}, el("span", { clase: "dato", style: "margin-top:16px" },
-                                     "Retirado del .md y declarado (retiros.json)"), lista(retiros, "lista avisos")) : null,
     problemas.length
       ? el("div", { clase: "saltos" }, ...problemas.slice(0, 300).map((d) =>
           el("a", { href: "#p-" + d.pagina, clase: "chip " + (CLASE[d.veredicto] || "") }, "p. " + d.pagina)))
-      : null);
+      : null,
+    el("details", { clase: "avanzado" }, el("summary", {}, "Detalles técnicos"),
+      el("div", { clase: "rejilla" },
+        dato("Origen del .md", vista.origen_md),
+        dato("Gate del kit (antes de los refuerzos)", kit),
+        dato("Clases de oráculo", clases),
+        dato("Residuo G3 (líneas repetidas)", residuo),
+        dato("Gate", inf.gate + " " + inf.version)),
+      el("div", { clase: "rejilla" },
+        el("div", {}, el("span", { clase: "dato" }, "sha256 del PDF"), el("span", { clase: "mono" }, inf.sha256_pdf)),
+        el("div", {}, el("span", { clase: "dato" }, "sha256 del .md"), el("span", { clase: "mono" }, inf.sha256_md))),
+      lista(inf.avisos, "lista avisos"),
+      retiros.length ? el("div", {}, el("span", { clase: "dato" }, "Retirado del .md y declarado (retiros.json)"),
+                          lista(retiros, "lista avisos")) : null));
 }
 
 function resumenCuraduria() {
@@ -446,8 +516,15 @@ function resumenCuraduria() {
 }
 
 function pintarAcciones() {
-  $("btn-docx").disabled = !vista.docx.permitido;
-  $("causa-docx").textContent = vista.docx.causa;
+  for (const boton of document.querySelectorAll("[data-formato]")) {
+    boton.disabled = ["docx", "gdocs", "txt", "html"].includes(boton.dataset.formato) && !vista.docx.permitido;
+  }
+  $("causa-exportar").textContent = vista.docx.permitido ? (vista.docx.causa || "Listo para exportar.")
+    : vista.docx.causa + " Aun así puedes bajar el Markdown y la evidencia.";
+  const faltan = paginasPendientes().length > 0;
+  $("paso-1").className = "hecho";
+  $("paso-2").className = faltan ? "activo" : "hecho";
+  $("paso-3").className = faltan ? "" : "activo";
   $("btn-tokens").disabled = !config.tokens.disponible;
   $("causa-tokens").textContent = config.tokens.disponible
     ? "Pide confirmación antes de enviar el PDF a la API de Anthropic."
@@ -456,7 +533,8 @@ function pintarAcciones() {
   const pendientes = paginasPendientes();
   for (const boton of document.querySelectorAll(".btn-lote")) {
     boton.disabled = !config.transcripcion.disponible || !pendientes.length;
-    boton.textContent = "Transcribir todas las páginas con imágenes (" + pendientes.length + ")";
+    boton.textContent = (boton.closest(".acciones-globales") ? "Transcribir imágenes (" :
+                         "Transcribir todas las páginas con imágenes (") + pendientes.length + ")";
   }
   for (const causa of document.querySelectorAll(".causa-lote")) {
     causa.textContent = !config.transcripcion.disponible ? config.transcripcion.causa
@@ -699,17 +777,17 @@ async function iniciar() {
   $("btn-convertir").addEventListener("click", convertir);
   $("btn-reverificar").addEventListener("click", reverificar);
   $("archivo-md").addEventListener("change", subirMd);
-  $("btn-md").addEventListener("click", () => descargar("md"));
-  $("btn-informe").addEventListener("click", () => descargar("informe"));
-  $("btn-docx").addEventListener("click", () => descargar("docx"));
-  $("btn-consolidado").addEventListener("click", () => descargar("consolidado"));
-  $("btn-curaduria").addEventListener("click", () => descargar("curaduria"));
+  for (const boton of document.querySelectorAll("[data-formato]")) {
+    boton.addEventListener("click", () => exportarFormato(boton.dataset.formato));
+  }
+  $("btn-ir-exportar").addEventListener("click", () => $("exportar").scrollIntoView({ behavior: "smooth" }));
   $("btn-tokens").addEventListener("click", medirTokens);
   for (const boton of document.querySelectorAll(".btn-lote")) {
     boton.addEventListener("click", () => transcribir(paginasPendientes()));
   }
   $("solo-problemas").addEventListener("change", (e) => {
     $("paginas").classList.toggle("solo-problemas", e.target.checked);
+    $("sin-pendientes").hidden = !(e.target.checked && vista && !vista.informe.detalle.some((d) => d.veredicto !== "🟢"));
   });
   avisar("Tope: PDF de " + config.tope_pdf_mb + " MB, .md de " + config.tope_md_mb + " MB.", false);
   const abierto = /^#doc=([0-9a-f]{32})$/.exec(location.hash);
