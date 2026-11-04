@@ -32,11 +32,39 @@ python3 -m venv .venv
 
 Abre **http://127.0.0.1:8787/** (o `http://localhost:8787/`). Ctrl+C lo detiene.
 
-Para habilitar «Medir tokens», la llave va en el entorno del proceso del servidor (nunca en el navegador):
+### Llave de la API de Claude («Medir tokens»)
 
-```bash
-ANTHROPIC_API_KEY=... .venv/bin/python banco/servidor_local.py
-```
+La llave vive en el **llavero de macOS**: ni en un archivo, ni en el historial de la terminal, ni en el repo.
+
+1. Guárdala una sola vez **en tu Terminal**, no en un chat. El comando la pide sin mostrarla en pantalla:
+
+   ```bash
+   security add-generic-password -a "$USER" -s pdf2ctx-anthropic -U -w
+   ```
+
+2. Arranca el banco con `--llavero`. El servidor la lee al arrancar, solo en su memoria:
+
+   ```bash
+   .venv/bin/python banco/servidor_local.py --llavero
+   ```
+
+   La consola dirá `Medir tokens: disponible (llave del llavero «pdf2ctx-anthropic»)`. Sin `--llavero`, el banco no
+   lee el llavero y «Medir tokens» queda deshabilitado.
+
+3. Para el kit por línea de comandos, la llave pasa solo a ese proceso:
+
+   ```bash
+   ANTHROPIC_API_KEY="$(security find-generic-password -s pdf2ctx-anthropic -w)" \
+     .venv/bin/python medir_tokens.py --pdf corpus/ley-iva-2026.pdf --modelo claude-sonnet-5-5
+   ```
+
+Para cambiarla, repite el paso 1 (`-U` la actualiza). Para borrarla:
+`security delete-generic-password -s pdf2ctx-anthropic`. Fuera de macOS, define `ANTHROPIC_API_KEY` en el
+entorno del proceso del servidor.
+
+`count_tokens` **no cobra**: solo tiene un límite de solicitudes por minuto, según la documentación oficial. Aun
+así, cada medición **envía el PDF a Anthropic**: úsalo solo con documentos públicos. La UI pide confirmación antes
+de cada envío, y el servidor exige `confirmado: true`.
 
 Dependencias nuevas: python-docx 1.2.0 (MIT, trae lxml BSD-3 y typing_extensions PSF) y Pillow 13.0.0
 (MIT-CMU). Nada GPL ni AGPL.
@@ -86,8 +114,8 @@ porque el banco no carga recursos externos: se usan si están instaladas en la m
 - CSP estricta (`default-src 'none'`, script con nonce, `connect-src 'self'`): la página no puede hablar
   con otro origen.
 - Entradas: el PDF debe empezar con `%PDF-` y pesar ≤ 50 MB; el `.md` debe ser UTF-8 y pesar ≤ 20 MB;
-  los ids son 32 caracteres hex (`../` → **400**); las páginas, `<número>.png`. Nada usa `subprocess`
-  con `shell=True` (el servidor no usa subprocess).
+  los ids son 32 caracteres hex (`../` → **400**); las páginas, `<número>.png`. Nada usa `shell=True`: el
+  servidor solo llama a `security` (lista de argumentos) cuando se arranca con `--llavero`.
 - Sin red saliente ni telemetría, salvo `count_tokens` tras un clic y una confirmación explícitos.
   La llave nunca llega al navegador, a las respuestas ni al registro.
 - Si en el futuro se corre en WSL2 y el navegador de Windows no lo alcanza: **no** abrir `0.0.0.0`.

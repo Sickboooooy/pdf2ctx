@@ -94,12 +94,12 @@ def puerto_libre() -> int:
 class Banco:
     """Una instancia de servidor_local.py en un puerto libre, con su propio entorno."""
 
-    def __init__(self, trabajo: Path, entorno: dict, nombre: str):
+    def __init__(self, trabajo: Path, entorno: dict, nombre: str, extra=()):
         self.puerto = puerto_libre()
         self.registro = trabajo / f"servidor_{nombre}.log"
         self.archivo_registro = open(self.registro, "w", encoding="utf-8")
         orden = [sys.executable, str(CARPETA_BANCO / "servidor_local.py"),
-                 "--puerto", str(self.puerto), "--trabajo", str(trabajo / nombre)]
+                 "--puerto", str(self.puerto), "--trabajo", str(trabajo / nombre), *extra]
         self.proceso = subprocess.Popen(orden, env=entorno, stdout=self.archivo_registro,
                                         stderr=subprocess.STDOUT)
         limite = time.time() + 30
@@ -449,6 +449,21 @@ def probar_con_llave(imitador: Imitador, ruta_pdf: Path, trabajo: Path) -> None:
               ", ".join(en_archivos) or f"{len(archivos)} archivos revisados")
 
 
+def probar_llavero(imitador: Imitador, trabajo: Path) -> None:
+    print("\n— Llave desde el llavero (--llavero) con un elemento inexistente: nunca toca la llave real")
+    servicio = "pdf2ctx-prueba-inexistente-" + secrets.token_hex(6)
+    banco = Banco(trabajo, entorno_prueba(imitador.url), "llavero",
+                  extra=["--llavero", "--servicio-llavero", servicio])
+    try:
+        tokens = json_de(banco.get("/api/config")[2]).get("tokens", {})
+        causa = tokens.get("causa", "")
+        comprobar("--llavero sin el elemento: arranca con el botón deshabilitado y la causa lo explica",
+                  tokens.get("disponible") is False and "llavero" in causa.lower()
+                  and (servicio in causa or sys.platform != "darwin"), causa)
+    finally:
+        banco.cerrar()
+
+
 def main() -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
@@ -472,6 +487,7 @@ def main() -> int:
         finally:
             banco.cerrar()
         probar_con_llave(imitador, ruta_pdf, trabajo)
+        probar_llavero(imitador, trabajo)
     except Exception as e:  # el gate nunca se cae en silencio: una excepción es una falla
         comprobar("la suite corrió completa", False, f"{type(e).__name__}: {e}")
     finally:

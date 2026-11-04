@@ -14,10 +14,11 @@ Seguridad
   · Escucha solo en 127.0.0.1. Un Host distinto de localhost o 127.0.0.1 recibe 403.
   · Todo POST exige el token aleatorio que se inyecta en banco.html (cabecera X-Banco-Token).
   · Sin red saliente, salvo count_tokens cuando el usuario lo pide y lo confirma.
-  · La llave ANTHROPIC_API_KEY se lee del entorno; nunca va al navegador ni a los registros.
+  · La llave ANTHROPIC_API_KEY se lee del entorno o, con --llavero, del llavero de macOS (elemento
+    «pdf2ctx-anthropic»). Vive solo en la memoria del servidor; nunca va al navegador ni a los registros.
 
 Uso
-  python banco/servidor_local.py [--puerto 8787] [--trabajo banco/trabajo]
+  python banco/servidor_local.py [--puerto 8787] [--trabajo banco/trabajo] [--llavero]
 """
 import argparse
 import base64
@@ -28,6 +29,7 @@ import os
 import re
 import secrets
 import shutil
+import subprocess
 import sys
 import threading
 import traceback
@@ -58,6 +60,10 @@ RE_ID = re.compile(r"[0-9a-f]{32}")
 RE_IMAGEN = re.compile(r"(\d{1,5})\.png")
 RE_MODELO = re.compile(r"[a-z0-9][a-z0-9.\-]{0,63}")
 CARACTERES_NO_XML = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f￾￿]")
+
+SERVICIO_LLAVERO = "pdf2ctx-anthropic"  # nombre del elemento en el llavero de macOS
+ORIGEN_LLAVE = "entorno"             # de dónde salió la llave (se muestra; la llave nunca)
+CAUSA_LLAVERO = ""                   # por qué no se pudo leer el llavero, si se pidió
 
 TOKEN = secrets.token_hex(32)        # se inyecta en banco.html; cambia en cada arranque
 TRABAJO = CARPETA_BANCO / "trabajo"  # se cambia con --trabajo
@@ -409,9 +415,25 @@ def exportar_docx(carpeta: Path):
 
 # ───────────────────────── medir tokens (count_tokens) ─────────────────────────
 
+def llave_desde_llavero(servicio: str):
+    """(llave | None, causa). Lee el llavero de macOS con `security`, sin shell y sin mostrar la llave."""
+    if sys.platform != "darwin":
+        return None, "el llavero solo existe en macOS; define ANTHROPIC_API_KEY en el entorno"
+    try:
+        resultado = subprocess.run(["security", "find-generic-password", "-s", servicio, "-w"],
+                                   capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return None, f"no se pudo consultar el llavero ({type(e).__name__})"
+    llave = resultado.stdout.strip()
+    if resultado.returncode != 0 or not llave:
+        return None, f"no hay un elemento «{servicio}» en el llavero"
+    return llave, ""
+
+
 def estado_tokens():
     if not os.environ.get("ANTHROPIC_API_KEY"):
-        return False, "Deshabilitado: el servidor no tiene ANTHROPIC_API_KEY en su entorno."
+        causa = "Deshabilitado: el servidor no tiene ANTHROPIC_API_KEY en su entorno."
+        return False, causa + (f" Llavero: {CAUSA_LLAVERO}." if CAUSA_LLAVERO else "")
     return True, ""
 
 
@@ -592,16 +614,25 @@ class Manejador(BaseHTTPRequestHandler):
 
 
 def main() -> int:
-    global TRABAJO
+    global TRABAJO, ORIGEN_LLAVE, CAUSA_LLAVERO
     for flujo in (sys.stdout, sys.stderr):
         if hasattr(flujo, "reconfigure"):
             flujo.reconfigure(encoding="utf-8")
     ap = argparse.ArgumentParser(description="Banco de pruebas local de pdf2ctx (solo 127.0.0.1).")
     ap.add_argument("--puerto", type=int, default=PUERTO_DEFECTO, help=f"Por defecto {PUERTO_DEFECTO}")
     ap.add_argument("--trabajo", default=str(TRABAJO), help="Carpeta de trabajo (por defecto banco/trabajo)")
+    ap.add_argument("--llavero", action="store_true",
+                    help="Si ANTHROPIC_API_KEY no está en el entorno, la toma del llavero de macOS")
+    ap.add_argument("--servicio-llavero", default=SERVICIO_LLAVERO,
+                    help=f"Nombre del elemento en el llavero (por defecto {SERVICIO_LLAVERO})")
     args = ap.parse_args()
     if not 1 <= args.puerto <= 65535:
         ap.error("--puerto debe estar entre 1 y 65535")
+    if args.llavero and not os.environ.get("ANTHROPIC_API_KEY"):
+        llave, CAUSA_LLAVERO = llave_desde_llavero(args.servicio_llavero)
+        if llave:
+            os.environ["ANTHROPIC_API_KEY"] = llave   # solo en la memoria de este proceso
+            ORIGEN_LLAVE = f"llavero «{args.servicio_llavero}»"
 
     TRABAJO = Path(args.trabajo).resolve()
     TRABAJO.mkdir(parents=True, exist_ok=True)
@@ -615,7 +646,8 @@ def main() -> int:
     disponible, causa = estado_tokens()
     print(f"Banco pdf2ctx en http://127.0.0.1:{args.puerto}/  (solo esta máquina)")
     print(f"Trabajo: {TRABAJO}")
-    print("Medir tokens: " + ("disponible; pide confirmación en cada medición" if disponible else causa))
+    print("Medir tokens: " + (f"disponible (llave del {ORIGEN_LLAVE}); pide confirmación en cada medición"
+                              if disponible else causa))
     print("Ctrl+C para detener.", flush=True)
     try:
         servidor.serve_forever()
