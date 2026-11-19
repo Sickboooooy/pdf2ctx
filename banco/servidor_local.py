@@ -27,6 +27,7 @@ import hashlib
 import hmac
 import io
 import json
+import math
 import os
 import re
 import secrets
@@ -48,6 +49,7 @@ import gate_reforzado as refuerzo  # noqa: E402
 import medir_tokens  # noqa: E402
 import pypdfium2 as pdfium  # noqa: E402
 import transcripcion  # noqa: E402  (banco/transcripcion.py: Claude visión, capa NO verificada)
+import ocr_local  # noqa: E402  (Windows.Media.Ocr: sin red ni clave de API)
 import curaduria  # noqa: E402  (banco/curaduria.py: qué pasa al Markdown consolidado, siempre en ámbar)
 from docx import Document  # noqa: E402
 from docx.enum.style import WD_STYLE_TYPE  # noqa: E402
@@ -73,6 +75,7 @@ CAUSA_LLAVERO = ""                   # por qué no se pudo leer el llavero, si s
 TOKEN = secrets.token_hex(32)        # se inyecta en banco.html; cambia en cada arranque
 TRABAJO = CARPETA_BANCO / "trabajo"  # se cambia con --trabajo
 CANDADO = threading.RLock()          # PDFium no es seguro entre hilos: una operación a la vez
+CANDADO_OCR = threading.Lock()       # evita dos lecturas locales simultáneas de la misma página
 
 
 class ErrorBanco(Exception):
@@ -343,7 +346,7 @@ def leer_transcripciones(carpeta: Path) -> dict:
     return {ruta.stem: leer_json(ruta) for ruta in sorted(destino.glob("*.json"), key=lambda r: int(r.stem))}
 
 
-def imagen_para_transcribir(carpeta: Path, n: int, region=None) -> bytes:
+def imagen_para_transcribir(carpeta: Path, n: int, region=None, lado_mayor=None) -> bytes:
     """PNG de la página (o solo del recorte `region` [izq, abajo, der, arriba] en puntos PDF), sin giro y con su
     lado mayor a transcripcion.LADO_MAYOR_PX: la letra pequeña de las capturas queda legible."""
     with CANDADO:
@@ -356,7 +359,8 @@ def imagen_para_transcribir(carpeta: Path, n: int, region=None) -> bytes:
                 pagina.set_rotation(0)   # las regiones del refuerzo están en coordenadas sin giro
                 ancho, alto = pagina.get_size()
                 medida = max(region[2] - region[0], region[3] - region[1]) if region else max(ancho, alto)
-                escala = min(transcripcion.LADO_MAYOR_PX / max(medida, 1), 6.0)
+                escala = min((lado_mayor or transcripcion.LADO_MAYOR_PX) / max(medida, 1), 6.0,
+                             math.sqrt(24_000_000 / max(ancho * alto, 1)))
                 imagen = pagina.render(scale=escala).to_pil()
                 if region:
                     imagen = imagen.crop((int(region[0] * escala), int((alto - region[3]) * escala),
@@ -405,20 +409,46 @@ def revisar_region(carpeta: Path, texto_n: str, texto_i: str, cuerpo: bytes) -> 
     """Decisión humana sobre una región: cotejado / rechazado / pendiente. Se guarda aparte; nunca da verde."""
     if not (texto_n.isdigit() and texto_i.isdigit()):
         raise ErrorBanco(400, "Página o región inválida")
-    decision = json_de(cuerpo).get("decision")
-    if decision not in ("cotejado", "rechazado", "pendiente"):
-        raise ErrorBanco(400, "Decisión inválida: cotejado, rechazado o pendiente")
+    datos = json_de(cuerpo)
+    decision = datos.get("decision")
+    if decision not in ("cotejado", "rechazado", "pendiente", "corregir"):
+        raise ErrorBanco(400, "Decisión inválida: cotejado, rechazado, pendiente o corregir")
     registro = leer_transcripciones(carpeta).get(texto_n)
     if not registro or int(texto_i) >= len(curaduria.regiones_de(registro)):
         raise ErrorBanco(404, "Esa página o región no tiene transcripción")
     with CANDADO:
         revisiones = leer_revisiones(carpeta)
         clave_region = f"{int(texto_n)}:{int(texto_i)}"
+        fecha = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+        anterior = revisiones.get(clave_region, {})
         if decision == "pendiente":
             revisiones.pop(clave_region, None)
+        elif decision == "corregir":
+            if datos.get("confirmado") is not True:
+                raise ErrorBanco(400, "Confirma que el texto corregido fue cotejado contra la imagen")
+            j, texto = datos.get("indice_linea"), datos.get("texto")
+            if type(j) is not int or j < 0:
+                raise ErrorBanco(400, "Índice de línea inválido")
+            if (not isinstance(texto, str) or not texto.strip() or len(texto) > 4000
+                    or "\n" in texto or "\r" in texto or CARACTERES_NO_XML.search(texto)):
+                raise ErrorBanco(400, "La corrección debe ser una línea de texto de hasta 4000 caracteres")
+            reg = curaduria.regiones_de(registro)[int(texto_i)]
+            paginas, _, _ = gate.leer_md(leer_md(carpeta))
+            lineas = curaduria.clasificar(reg.get("texto") or "", (paginas or {}).get(int(texto_n), ""))
+            if j >= len(lineas) or datos.get("original") != lineas[j]["linea"]:
+                raise ErrorBanco(409, "La línea de origen cambió: recarga el documento antes de corregirla")
+            correcciones = dict(anterior.get("correcciones", {}))
+            correcciones[str(j)] = {"original": lineas[j]["linea"], "texto": texto.strip(),
+                                   "sha256_transcripcion": curaduria.huella_transcripcion(reg),
+                                   "actor": "revisión humana", "fecha_utc": fecha}
+            revisiones[clave_region] = {**anterior, "correcciones": correcciones}
         else:
-            revisiones[clave_region] = {"decision": decision, "actor": "revisión humana", "fecha_utc":
-                                        datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")}
+            revisiones[clave_region] = {**anterior, "decision": decision, "actor": "revisión humana", "fecha_utc": fecha}
+        evento = {"pagina": int(texto_n), "indice_region": int(texto_i), "decision": decision,
+                  "actor": "revisión humana", "fecha_utc": fecha,
+                  "antes": anterior, "despues": revisiones.get(clave_region)}
+        with (carpeta / "curaduria_historial.jsonl").open("a", encoding="utf-8") as historial:
+            historial.write(json.dumps(evento, ensure_ascii=False) + "\n")
         escribir_json(carpeta / "curaduria_revision.json", revisiones)
     return vista(carpeta)
 
@@ -457,6 +487,39 @@ def transcribir_pagina(carpeta: Path, texto_n: str, cuerpo: bytes) -> dict:
     return registro
 
 
+def leer_ocr_local(carpeta: Path, texto_n: str) -> dict:
+    """Lectura independiente en esta PC. No reemplaza la capa de texto ni el veredicto del gate."""
+    if not texto_n.isdigit():
+        raise ErrorBanco(400, "Página inválida: se espera un número")
+    n = int(texto_n)
+    informe = leer_json(carpeta / "informe.json")
+    if not 1 <= n <= informe["paginas"]:
+        raise ErrorBanco(404, f"El PDF no tiene página {n}")
+    disponibilidad = ocr_local.estado()
+    if not disponibilidad["disponible"]:
+        raise ErrorBanco(412, disponibilidad["causa"])
+    with CANDADO_OCR:
+        if str(n) in leer_transcripciones(carpeta):
+            raise ErrorBanco(409, "La página ya tiene una lectura guardada; se conserva junto con su revisión.")
+        regiones = []
+        lado = min(ocr_local.LADO_MAYOR_PX, disponibilidad["max_dimension"])
+        for region in regiones_a_transcribir(informe, n):
+            png = imagen_para_transcribir(carpeta, n, region, lado_mayor=lado)
+            try:
+                resultado = ocr_local.reconocer(png, region)
+            except ocr_local.ErrorOCR as e:
+                raise ErrorBanco(502, str(e)) from None
+            regiones.append({**resultado, "sha256_imagen": hashlib.sha256(png).hexdigest()})
+        registro = {"pagina": n, "local": True, "sha256_pdf": informe["sha256_pdf"],
+                    "fecha_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+                    "regiones": regiones}
+        with CANDADO:
+            destino = carpeta / "transcripciones"
+            destino.mkdir(exist_ok=True)
+            escribir_json(destino / f"{n}.json", registro)
+    return registro
+
+
 # ───────────────────────── .docx de lectura humana ─────────────────────────
 
 def para_docx(texto: str) -> str:
@@ -486,6 +549,10 @@ def agregar_lineas(doc, texto: str) -> None:
             doc.add_heading(titulo.group(2).strip(), level=min(len(titulo.group(1)), 4))
         else:
             doc.add_paragraph(linea.rstrip())
+
+
+def origen_lectura(metodo: str) -> str:
+    return "OCR local" if metodo.startswith("ocr/") else "asistido por IA"
 
 
 def construir_docx(informe: dict, nombre_pdf: str, preambulo: str, segmentos: list,
@@ -535,7 +602,7 @@ def construir_docx(informe: dict, nombre_pdf: str, preambulo: str, segmentos: li
         agregar_lineas(doc, "".join(por_pagina.get(n, [])))
         # Solo lo que la curaduría incorporó al consolidado, delimitado y en ámbar: nunca como texto verificado.
         for region, metodo, estado, lineas in transcripciones.get(n, []):
-            doc.add_paragraph(f"Texto en imagen · asistido por IA ({metodo}) · región {region} · {estado} — "
+            doc.add_paragraph(f"Texto en imagen · {origen_lectura(metodo)} ({metodo}) · región {region} · {estado} — "
                               "NO VERIFICADO contra el PDF:", style=ESTILO_TRANSCRIPCION).runs[0].bold = True
             for linea in lineas:
                 doc.add_paragraph(para_docx(linea), style=ESTILO_TRANSCRIPCION)
@@ -591,7 +658,7 @@ def construir_texto(f: dict) -> str:
                                                        if n in f["giradas"] else ""))
         lineas += [x.rstrip() for x in f["paginas"].get(n, "").strip("\n").splitlines()]
         for region, metodo, estado, frag in f["incorporados"].get(n, []):
-            lineas.append(f"[Texto en imagen · asistido por IA ({metodo}) · región {region} · {estado} — NO VERIFICADO]")
+            lineas.append(f"[Texto en imagen · {origen_lectura(metodo)} ({metodo}) · región {region} · {estado} — NO VERIFICADO]")
             lineas += [f"  │ {x}" for x in frag]
         lineas.append("")
     return "\n".join(lineas)
@@ -607,7 +674,7 @@ def construir_html(f: dict) -> str:
         giro = f" · girada {f['giradas'][n]}° en el original" if n in f["giradas"] else ""
         cuerpo = h.escape(f["paginas"].get(n, "").strip("\n"))
         bloques = "".join(
-            f'<blockquote><b>Texto en imagen · asistido por IA ({h.escape(metodo)}) · región {h.escape(region)} · '
+            f'<blockquote><b>Texto en imagen · {origen_lectura(metodo)} ({h.escape(metodo)}) · región {h.escape(region)} · '
             f'{h.escape(estado)} — NO VERIFICADO</b><br>' + "<br>".join(h.escape(x) for x in frag) + "</blockquote>"
             for region, metodo, estado, frag in f["incorporados"].get(n, []))
         partes.append(f'<section><p class="marca">p. {n}{h.escape(giro)}</p><pre>{cuerpo}</pre>{bloques}</section>')
@@ -741,6 +808,7 @@ def configuracion() -> dict:
                        "modelo_defecto": medir_tokens.MODELO_DEFECTO},
             "transcripcion": {"disponible": disponible, "causa": causa,
                               "modelo_defecto": transcripcion.MODELO_DEFECTO, "esfuerzo": transcripcion.ESFUERZO},
+            "ocr_local": ocr_local.estado(),
             "tope_pdf_mb": TOPE_PDF // 2 ** 20, "tope_md_mb": TOPE_TEXTO // 2 ** 20}
 
 
@@ -845,6 +913,9 @@ class Manejador(BaseHTTPRequestHandler):
                 return self.responder_json(200, revisar_region(carpeta, accion[1], accion[2], self.leer_cuerpo(TOPE_TEXTO)))
             if metodo == "POST" and len(accion) == 2 and accion[0] == "transcribir":
                 return self.responder_json(200, transcribir_pagina(carpeta, accion[1], self.leer_cuerpo(TOPE_TEXTO)))
+            if metodo == "POST" and len(accion) == 2 and accion[0] == "ocr":
+                self.leer_cuerpo(TOPE_TEXTO)
+                return self.responder_json(200, leer_ocr_local(carpeta, accion[1]))
         raise ErrorBanco(404, "Ruta inexistente")
 
     def leer_cuerpo(self, tope: int) -> bytes:

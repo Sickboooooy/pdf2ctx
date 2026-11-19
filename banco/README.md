@@ -34,6 +34,43 @@ python3 -m venv .venv
 
 Abre **http://127.0.0.1:8787/** (o `http://localhost:8787/`). Ctrl+C lo detiene.
 
+### OCR local en Windows
+
+En Windows puedes leer imágenes sin clave de API, con el motor `Windows.Media.Ocr` y un idioma español
+ya instalado. En **Completar y revisar**, selecciona **OCR local · esta PC** y pulsa **Leer con OCR local**.
+Las imágenes se procesan en esta computadora; no se llama a Anthropic ni se descargan modelos.
+
+```powershell
+.\.venv\Scripts\python.exe banco\servidor_local.py
+# Prueba con el motor OCR real, documentos sintéticos y sin API externa:
+.\.venv\Scripts\python.exe banco\probar_ocr_local.py
+```
+
+- En una página escaneada o con OCR previo, lee la página completa; en páginas con texto nativo, solo
+  los recortes de imágenes grandes que detectó R8. Usa hasta 3600 px en el lado mayor, sujeto al límite
+  del motor y a un máximo de 24 millones de píxeles por render.
+- `ocr_local.py` llama a `ocr_windows.ps1` con Windows PowerShell, sin cambiar políticas de ejecución.
+  Si Windows o el idioma español no están disponibles, la interfaz muestra la causa y permite elegir
+  la vía opcional de Claude, que requiere su propia clave y confirmación de envío.
+- El texto recuperado se guarda en `trabajo/<id>/transcripciones/<n>.json`: incluye idioma, fecha,
+  SHA-256 de la imagen y del PDF, y palabras con sus posiciones en píxeles. El motor no proporciona
+  puntuaciones de confianza por palabra; no se inventan.
+- La curaduría y las exportaciones identifican la procedencia como **OCR local**, en ámbar y
+  **NO VERIFICADO**. El PDF, el Markdown base y el veredicto del gate conservan su función de referencia.
+  Las lecturas locales ya guardadas no se sobrescriben al repetir el OCR.
+- Coteja cifras y campos contra la imagen: el OCR puede confundir letras y dígitos. Importes dudosos
+  como `45,600.OO` y cifras contradictorias bajo etiquetas como `Fecha` quedan en abstención.
+- Para recuperar una línea en abstención, abre **Corregir esta línea contra la imagen**, escribe el
+  texto exacto y pulsa **Guardar corrección cotejada**. El texto corregido se incorpora en ámbar a las
+  exportaciones; el OCR original sigue guardado. **Cotejar lo incorporado** solo revisa lo que ya entró:
+  no incorpora automáticamente cifras inciertas.
+- Las correcciones se guardan en `curaduria_revision.json`, vinculadas al texto original y su SHA-256.
+  `curaduria_historial.jsonl` registra cada corrección y decisión con su actor y fecha. Rechazar la región
+  excluye sus correcciones; **Deshacer revisión y correcciones** restaura la clasificación del OCR y
+  conserva el historial. Si cambia la transcripción, una corrección anterior queda en abstención.
+- Regresión de esta revisión manual: `.\.venv\Scripts\python.exe banco\probar_correcciones.py`
+  (OCR simulado con el error de ceros y letras; sin servicios externos).
+
 ### Llave de la API de Claude («Medir tokens»)
 
 La llave vive en el **llavero de macOS**: ni en un archivo, ni en el historial de la terminal, ni en el repo.

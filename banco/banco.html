@@ -192,7 +192,7 @@
 <main>
   <section class="portada">
     <h1>Si el .md no se valida contra el PDF, <em>no pasa.</em></h1>
-    <p>Sube un PDF: el gate verifica cada página contra el original, Claude puede leer el texto de las imágenes y
+    <p>Sube un PDF: el gate verifica cada página contra el original, el OCR local puede leer el texto de las imágenes y
       tú decides qué entra al documento final.</p>
     <ol class="pasos">
       <li id="paso-1" class="activo"><b>1</b>Cargar el PDF</li>
@@ -225,9 +225,15 @@
     <div class="rejilla-acciones">
       <div class="tarjeta">
         <p class="etiqueta-seccion">2 · Completar y revisar</p>
-        <p class="tenue">Claude lee el texto de las imágenes; la curaduría quita lo duplicado y lo dudoso. Revisa las
+        <p class="tenue">Lee el texto de las imágenes en esta PC; la curaduría quita lo duplicado y lo dudoso. Revisa las
           páginas marcadas y confirma cada fragmento contra la imagen.</p>
-        <button id="btn-transcribir" class="btn-lote primario">Transcribir imágenes con Claude</button>
+        <div class="fila"><label>Lectura de imágenes
+          <select id="motor-transcripcion">
+            <option value="local">OCR local · esta PC</option>
+            <option value="claude">Claude · API</option>
+          </select>
+        </label></div>
+        <button id="btn-transcribir" class="btn-lote primario">Leer imágenes con OCR local</button>
         <p class="causa causa-lote" id="causa-transcribir"></p>
         <label class="interruptor"><input type="checkbox" id="solo-problemas" checked> Ver solo las páginas que
           requieren atención</label>
@@ -531,14 +537,18 @@ function pintarAcciones() {
     : config.tokens.causa;
   // El botón general (una sola confirmación para todas las marcadas pendientes) aparece en dos lugares.
   const pendientes = paginasPendientes();
+  const local = usarOcrLocal();
+  const lectura = estadoLectura();
   for (const boton of document.querySelectorAll(".btn-lote")) {
-    boton.disabled = !config.transcripcion.disponible || !pendientes.length;
-    boton.textContent = (boton.closest(".acciones-globales") ? "Transcribir imágenes (" :
+    boton.disabled = !lectura.disponible || !pendientes.length;
+    boton.textContent = local ? "Leer con OCR local (" + pendientes.length + ")" :
+                        (boton.closest(".acciones-globales") ? "Transcribir imágenes (" :
                          "Transcribir todas las páginas con imágenes (") + pendientes.length + ")";
   }
   for (const causa of document.querySelectorAll(".causa-lote")) {
-    causa.textContent = !config.transcripcion.disponible ? config.transcripcion.causa
-      : pendientes.length ? "Una sola confirmación para todas. Texto NO verificado; tiene costo."
+    causa.textContent = !lectura.disponible ? lectura.causa
+      : pendientes.length ? (local ? "OCR en español en esta PC. Sin API ni envío de imágenes. Requiere cotejo."
+                                   : "Una sola confirmación para todas. Texto NO verificado; tiene costo.")
       : "No quedan páginas con imágenes por transcribir.";
   }
 }
@@ -565,6 +575,17 @@ function revisar(n, i, decision) {
   });
 }
 
+
+function corregirLinea(n, i, linea, texto) {
+  tarea("Guardando la corrección cotejada…", async () => {
+    await pedirJson("POST", "/api/doc/" + vista.id + "/curaduria/" + n + "/" + i,
+                    JSON.stringify({ decision: "corregir", indice_linea: linea.indice_linea,
+                      original: linea.linea_original || linea.linea, texto: texto, confirmado: true }), "application/json");
+    await refrescarCuraduria([n]);
+    avisar("Corrección guardada (p. " + n + "). Se conserva el OCR original; el texto cotejado sigue NO VERIFICADO por el gate.", false);
+  });
+}
+
 // Una transcripción guardada tiene regiones; las de la primera versión eran de página entera («legado»).
 function regionesDe(t) {
   return t.regiones || [{ region: null, modo: "pagina_completa (legado)", texto: t.texto,
@@ -588,6 +609,13 @@ function referenciaDeUso() {
 
 // ───────── transcripción asistida (Claude visión): capa aparte, NO verificada ─────────
 
+function usarOcrLocal() { return $("motor-transcripcion").value === "local"; }
+
+function estadoLectura() {
+  return usarOcrLocal() ? (config.ocr_local || { disponible: false, causa: "OCR local no disponible." })
+                       : config.transcripcion;
+}
+
 // Páginas que el gate marcó porque su contenido está en imágenes (sin capa de texto, OCR previo o R8).
 function esMarcada(d) {
   return d.veredicto === "🟡" && (d.clase !== "texto" || d.hallazgos.some((h) => h.startsWith("R8")));
@@ -600,6 +628,25 @@ function paginasPendientes() {
 
 const DECISION = { incorporar: "incorporado · ámbar", excluir: "excluido", abstener: "abstención" };
 
+function lineaCurada(e, n, i) {
+  const clase = e.clase === "corregido_humano" ? "corrección humana" : e.clase;
+  const fila = el("li", { clase: "c-" + e.decision, title: e.motivo },
+    el("span", { clase: "etiqueta-c" }, DECISION[e.decision] + (e.clase !== "nuevo" ? " · " + clase : "")),
+    e.linea || "(sin texto legible)");
+  if ((e.clase === "incierto" || e.correccion_humana) && Number.isInteger(e.indice_linea)) {
+    const etiqueta = "Texto cotejado de la página " + n + ", línea " + (e.indice_linea + 1);
+    const campo = el("input", { type: "text", "aria-label": etiqueta, maxlength: "4000", style: "width:100%;margin:8px 0" });
+    campo.value = e.linea;
+    const guardar = el("button", {}, "Guardar corrección cotejada");
+    guardar.addEventListener("click", () => corregirLinea(n, i, e, campo.value));
+    fila.append(el("details", {}, el("summary", {}, "Corregir esta línea contra la imagen"),
+      el("p", { clase: "causa" }, "Escribe el texto exacto que ves en la imagen. La corrección se guarda aparte del OCR original."),
+      el("label", {}, etiqueta, campo), guardar,
+      e.linea_original ? el("p", { clase: "causa" }, "OCR original: " + e.linea_original) : null));
+  }
+  return fila;
+}
+
 // Cada región transcrita con lo que decidió la curaduría (curaduria.py) y la revisión humana. Nada aquí es verde.
 function cajaTranscripcion(n, d) {
   const caja = el("div", { id: "tr-" + n });
@@ -610,28 +657,30 @@ function cajaTranscripcion(n, d) {
       const lineas = registro.filter((e) => e.indice_region === i);
       const humana = lineas.find((e) => e.actor === "revisión humana");
       const botones = el("div", { clase: "fila" });
-      for (const [decision, texto] of [["cotejado", "Cotejado contra la imagen"], ["rechazado", "Rechazar"],
-                                       ["pendiente", "Deshacer"]]) {
+      for (const [decision, texto] of [["cotejado", "Cotejar lo incorporado"], ["rechazado", "Rechazar"],
+                                       ["pendiente", "Deshacer revisión y correcciones"]]) {
         const boton = el("button", {}, texto);
         boton.addEventListener("click", () => revisar(n, i, decision));
         botones.append(boton);
       }
+      const origen = reg.local ? reg.modelo_respuesta + " · procesado en esta PC"
+        : reg.modelo_respuesta + " · entrada " + ((reg.uso || {}).input_tokens || 0) + " · salida " +
+          ((reg.uso || {}).output_tokens || 0) + (reg.request_id ? " · " + reg.request_id : "");
       caja.append(el("div", { clase: "transcripcion" },
         el("span", { clase: "chip v-ambar" }, "Texto en imagen · no verificado"),
         el("div", { clase: "metricas" },
           (reg.region ? "región " + reg.region.map(Math.round).join(",") : "página completa") + " · " +
-          (reg.modo || "") + " · " + reg.modelo_respuesta + " · entrada " + ((reg.uso || {}).input_tokens || 0) +
-          " · salida " + ((reg.uso || {}).output_tokens || 0) + (reg.request_id ? " · " + reg.request_id : "")),
-        el("ul", { clase: "curaduria" }, ...lineas.map((e) => el("li", { clase: "c-" + e.decision, title: e.motivo },
-          el("span", { clase: "etiqueta-c" }, DECISION[e.decision] + (e.clase !== "nuevo" ? " · " + e.clase : "")),
-          e.linea || "(sin texto legible)"))),
+          (reg.modo || "") + " · " + origen),
+        el("ul", { clase: "curaduria" }, ...lineas.map((e) => lineaCurada(e, n, i))),
+        lineas.some((e) => e.decision === "abstener") ? el("p", { clase: "causa" },
+          "Cotejar la región no incorpora las líneas en abstención. Corrige y confirma cada una para incorporarla.") : null,
         el("div", { clase: "metricas" }, humana ? "Revisión humana: " + humana.estado
           : "Sin revisión humana: lo incorporado queda pendiente de cotejo."),
         botones,
         el("details", {}, el("summary", {}, "Transcripción original (sin curar)"), el("pre", {}, reg.texto || ""))));
     });
-  } else if (esMarcada(d) && config.transcripcion.disponible) {
-    const boton = el("button", {}, "Transcribir esta página con Claude");
+  } else if (esMarcada(d) && estadoLectura().disponible) {
+    const boton = el("button", {}, usarOcrLocal() ? "Leer esta página con OCR local" : "Transcribir esta página con Claude");
     boton.addEventListener("click", () => transcribir([n]));
     caja.append(boton);
   }
@@ -640,23 +689,24 @@ function cajaTranscripcion(n, d) {
 
 function transcribir(paginas) {
   if (!paginas.length) { avisar("No hay páginas marcadas sin transcribir.", false); return; }
+  const local = usarOcrLocal();
   const modelo = config.transcripcion.modelo_defecto;
   const lista = paginas.length > 12 ? paginas.slice(0, 12).join(", ") + "…" : paginas.join(", ");
-  const aceptar = window.confirm(
+  const aceptar = local || window.confirm(
     "⚠️ Transcribir con Claude ENVÍA " + paginas.length + " página(s) como imagen a la API de Anthropic (" +
     modelo + "): pp. " + lista + ".\nTiene COSTO real según los tokens que reporte la API.\n" +
     referenciaDeUso() + "\n\n" +
     "El texto resultante NO queda verificado contra el PDF: no entra al .md ni cambia el veredicto.\n\n" +
     "¿Enviar estas páginas de «" + vista.nombre_pdf + "»? (una sola autorización para todas)");
   if (!aceptar) { avisar("Transcripción cancelada: no se envió nada.", false); return; }
-  tarea("Transcribiendo…", async () => {
+  tarea(local ? "Leyendo con OCR local…" : "Transcribiendo…", async () => {
     let entrada = 0, salida = 0, hechas = 0;
     for (const n of paginas) {
-      avisar("Transcribiendo p. " + n + " (" + (hechas + 1) + " de " + paginas.length + ")…", false);
+      avisar((local ? "OCR local en p. " : "Transcribiendo p. ") + n + " (" + (hechas + 1) + " de " + paginas.length + ")…", false);
       let t;
       try {
-        t = await pedirJson("POST", "/api/doc/" + vista.id + "/transcribir/" + n,
-                            JSON.stringify({ confirmado: true, modelo: modelo }), "application/json");
+        t = await pedirJson("POST", "/api/doc/" + vista.id + (local ? "/ocr/" : "/transcribir/") + n,
+                            JSON.stringify(local ? {} : { confirmado: true, modelo: modelo }), "application/json");
       } catch (e) {
         pintarAcciones();
         throw new Error("p. " + n + ": " + e.message + " — se transcribieron " + hechas + " de " + paginas.length +
@@ -666,7 +716,8 @@ function transcribir(paginas) {
       await refrescarCuraduria([n]);
     }
     pintarAcciones();
-    avisar("Transcritas " + hechas + " página(s) · entrada " + entrada + " · salida " + salida +
+    avisar(local ? "OCR local terminado: " + hechas + " página(s). Revisa el texto recuperado contra la imagen; sigue NO VERIFICADO."
+           : "Transcritas " + hechas + " página(s) · entrada " + entrada + " · salida " + salida +
            " tokens (uso real reportado por la API). Texto NO verificado.", false);
   });
 }
@@ -774,6 +825,16 @@ async function iniciar() {
     $("convertidor").append(el("option", { value: nombre }, DESCRIPCION[nombre] || nombre));
   }
   $("modelo").value = config.tokens.modelo_defecto;
+  $("motor-transcripcion").value = config.ocr_local && config.ocr_local.disponible ? "local"
+                                  : config.transcripcion.disponible ? "claude" : "local";
+  $("motor-transcripcion").addEventListener("change", () => {
+    if (!vista) return;
+    for (const d of vista.informe.detalle) {
+      const anterior = $("tr-" + d.pagina);
+      if (anterior) anterior.replaceWith(cajaTranscripcion(d.pagina, d));
+    }
+    pintarAcciones();
+  });
   $("btn-convertir").addEventListener("click", convertir);
   $("btn-reverificar").addEventListener("click", reverificar);
   $("archivo-md").addEventListener("change", subirMd);

@@ -15,6 +15,7 @@ Lo incorporado entra al consolidado en bloques delimitados y trazables (página,
 SIEMPRE en ámbar: una coincidencia o un cotejo humano no lo vuelven verificado. Quitar los bloques del
 consolidado devuelve, byte por byte, el .md base: ninguna transcripción lo modifica en silencio.
 """
+import hashlib
 import re
 import sys
 from collections import Counter
@@ -23,7 +24,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # el kit (normalización y anclas del gate)
 import gate_fidelidad as gate  # noqa: E402
 
-VERSION = "curaduria-2"
+VERSION = "curaduria-4"
 SIN_TEXTO = "SIN TEXTO EN IMÁGENES"
 MIN_CARACTERES = 4
 MARCA = "<!-- pdf2ctx:asistido"
@@ -33,6 +34,10 @@ RE_DESCRIPCION = re.compile(
     r"fotograf[ií]a|gr[aá]fico|pantalla|figura)s?\b.*|(imagen|ilustraci[oó]n|figura|fotograf[ií]a|descripci[oó]n)\s*:.*)$",
     re.IGNORECASE)
 DECISION = {"nuevo": "incorporar", "duplicado": "excluir", "decorativo": "excluir", "incierto": "abstener"}
+# Importes o letras dentro de una cifra. «Artículo 1o.» es un ordinal válido.
+RE_CIFRA_DUDOSA = re.compile(
+    r"(?:[$€]\s*[0-9][0-9.,]*[OoIl][0-9OoIl.,]*|"
+    r"[0-9][0-9.,]*[OoIl][0-9OoIl.,]*[0-9]|[0-9][0-9.,]*[OoIl]{2,})\b")
 
 
 def clave(texto: str) -> str:
@@ -59,7 +64,7 @@ def clasificar(transcripcion: str, texto_pagina: str) -> list:
     con_cifras = {}
     for linea in texto_pagina.splitlines():
         k = clave(linea)
-        if _cifras(k) and len(_palabras(k).split()) >= 2:
+        if _cifras(k) and _palabras(k):
             con_cifras.setdefault(_palabras(k), set()).add(k)
     resultado, vistas = [], set()
     for bruta in transcripcion.splitlines():
@@ -72,6 +77,8 @@ def clasificar(transcripcion: str, texto_pagina: str) -> list:
             clase, motivo = "decorativo", "nota o descripción del modelo, no texto del documento"
         elif "[ilegible]" in linea.lower():
             clase, motivo = "incierto", "lectura parcial: contiene [ilegible]"
+        elif RE_CIFRA_DUDOSA.search(linea):
+            clase, motivo = "incierto", "posible confusión entre letras y dígitos en una cifra: cotejar contra la imagen"
         elif _cifras(k) and _palabras(k) in con_cifras and k not in con_cifras[_palabras(k)]:
             clase, motivo = "incierto", "contradice la capa de texto: mismas palabras, otras cifras"
         elif f" {k} " in capa:
@@ -99,11 +106,20 @@ def _region_texto(region) -> str:
     return ",".join(str(round(v)) for v in region) if region else "página completa"
 
 
+def metodo_de(reg: dict) -> str:
+    return reg.get("metodo") or f"vision/{reg.get('modelo_respuesta')}"
+
+
+def huella_transcripcion(reg: dict) -> str:
+    return hashlib.sha256((reg.get("texto") or "").encode("utf-8")).hexdigest()
+
+
 def _bloque(n: int, i: int, reg: dict, lineas: list, estado: str, salto: bool) -> str:
     atributos = (f"p={n} region={_region_texto(reg.get('region')).replace(' ', '_')} indice={i} "
-                 f"metodo=vision/{reg.get('modelo_respuesta')} request={reg.get('request_id')} "
+                 f"metodo={metodo_de(reg)} request={reg.get('request_id')} "
                  f"estado=ambar cotejo={estado}" + (" nl=1" if salto else ""))
-    cuerpo = [f"> **Texto en imagen · asistido por IA ({reg.get('modelo_respuesta')}) · NO VERIFICADO** — "
+    origen = "OCR local" if reg.get("local") else "asistido por IA"
+    cuerpo = [f"> **Texto en imagen · {origen} ({reg.get('modelo_respuesta')}) · NO VERIFICADO** — "
               f"p. {n}, región {_region_texto(reg.get('region'))}, {estado.replace('_', ' ')}"]
     cuerpo += ["> " + linea.replace("<!--", "&lt;!--").replace("-->", "--&gt;") for linea in lineas]
     return ("\n" if salto else "") + f"<!-- pdf2ctx:asistido {atributos} -->\n" + "\n".join(cuerpo) + \
@@ -128,28 +144,41 @@ def consolidar(md_base: str, transcripciones: dict, revisiones: dict, fecha: str
         n = int(texto_n)
         for i, reg in enumerate(regiones_de(transcripciones[texto_n])):
             base = {"pagina": n, "indice_region": i, "region": _region_texto(reg.get("region")),
-                    "metodo": f"vision/{reg.get('modelo_respuesta')}", "modo": reg.get("modo"),
+                    "metodo": metodo_de(reg), "modo": reg.get("modo"),
                     "request_id": reg.get("request_id")}
-            humana = revisiones.get(f"{n}:{i}", {}).get("decision")
+            revision = revisiones.get(f"{n}:{i}", {})
+            humana = revision.get("decision")
             lineas = clasificar(reg.get("texto") or "", paginas.get(n, ""))
             if not lineas:
                 registro.append({**base, "linea": "", "clase": "sin_texto", "decision": "abstener",
                                  "motivo": "sin texto legible en la imagen", "estado": "ámbar", "actor": VERSION})
             incorporadas = []
-            for item in lineas:
-                entrada = {**base, **item, "actor": VERSION,
+            for j, item in enumerate(lineas):
+                entrada = {**base, **item, "indice_linea": j, "actor": VERSION,
                            "estado": "ámbar" if item["decision"] != "excluir" else "excluido"}
-                if item["clase"] == "nuevo":
+                correccion = revision.get("correcciones", {}).get(str(j))
+                if correccion:
+                    if (correccion.get("original") == item["linea"]
+                            and correccion.get("sha256_transcripcion") == huella_transcripcion(reg)):
+                        entrada.update(linea=correccion["texto"], linea_original=item["linea"],
+                                       clase_original=item["clase"], motivo_original=item["motivo"],
+                                       clase="corregido_humano", decision="incorporar", actor="revisión humana",
+                                       motivo="texto corregido y cotejado contra la imagen por revisión humana",
+                                       correccion_humana=correccion)
+                    else:
+                        entrada.update(clase="incierto", decision="abstener", correccion_obsoleta=True,
+                                       motivo="corrección no aplicada: cambió la transcripción de origen; volver a cotejar")
+                if entrada["clase"] in ("nuevo", "corregido_humano"):
                     if humana == "rechazado":
                         entrada.update(decision="excluir", estado="excluido", actor="revisión humana",
                                        motivo="rechazado en revisión humana contra la imagen")
-                    elif humana == "cotejado":
+                    elif humana == "cotejado" or entrada["clase"] == "corregido_humano":
                         entrada.update(estado="ámbar · cotejado por revisión humana, no verificado por el gate",
                                        actor="revisión humana")
-                        incorporadas.append(item["linea"])
+                        incorporadas.append(entrada["linea"])
                     else:
                         entrada["estado"] = "ámbar · pendiente de cotejo"
-                        incorporadas.append(item["linea"])
+                        incorporadas.append(entrada["linea"])
                 registro.append(entrada)
             if incorporadas:
                 estado = "cotejado_humano" if humana == "cotejado" else "pendiente"
