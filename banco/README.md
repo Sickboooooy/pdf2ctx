@@ -13,6 +13,8 @@ veredicto que dio el kit antes de los refuerzos.
 | `servidor_local.py` | Servidor HTTP (biblioteca estándar + el kit + python-docx/Pillow). Solo `127.0.0.1`. |
 | `banco.html` | La UI, con el diseño de itosturre.com: un solo archivo, sin CDNs ni recursos externos. |
 | `../gate_reforzado.py` | Refuerzos del gate y convertidor `visible` (no es parte del kit: lo importa). |
+| `../chunking.py` | Chunking jurídico del `.md` verificado en chunks semánticos (artículos, fracciones…) para RAG/LLM. |
+| `../probar_chunking.py` | El gate del chunking (13 comprobaciones sobre un documento normativo sintético). |
 | `probar_banco.py` | El gate de esta tarea: arranca el servidor y lo prueba de punta a punta. |
 | `trabajo/` | Documentos subidos (en `.gitignore`: puede contener expedientes confidenciales). |
 
@@ -214,7 +216,8 @@ de cargarlas al desplazarse.
 ## Correcciones verificadas (rama `feat/pdf2ctx-correcciones`, 4-XI-2026)
 
 - `probar_banco.py` con el gate reforzado y el convertidor `visible` por defecto: **56 pasan · 0 fallan**.
-- `defectos/probar_defectos.py`: corregidas **V1, V2, V4, V5, V6, V7, V8 y V10**; quedan pendientes **V3** y **V9**.
+- `defectos/probar_defectos.py`: corregidas **V1–V10** (R1–R10). La localización de cifras por cotejar en OCR (V9)
+  está en R9; leer la imagen para corregir el valor queda fuera (exige un motor OCR).
   Ver `defectos/INFORME_COBERTURA.md`.
 - Ley del IVA limpia: 🟢 con los dos convertidores. El convertidor `visible` sobre la ley con la instrucción
   oculta inyectada da exactamente el mismo `.md` que la ley limpia (mismo SHA-256) y declara el retiro.

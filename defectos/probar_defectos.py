@@ -99,11 +99,13 @@ FUZZ_CON_V4 = {"fuzz_bytes_01", "fuzz_bytes_08", "fuzz_sin_cola", "fuzz_truncado
 CORREGIDAS = {
     "V1": "R1: el gate marca 🔴 el texto no visible en el .md; el convertidor «visible» lo retira y lo declara",
     "V2": "R2: cada cifra debe conservar las dos palabras que la preceden",
+    "V3": "R3: tabla dibujada por columnas → 🟡 (no se certifica 🟢 la pérdida renglón–columna)",
     "V4": "R4: %%EOF, startxref y flujos comprimidos; archivo dañado → 🟡 NO VERIFICABLE",
     "V5": "R5: folios impresos «N de M» con saltos o repetidos → 🟡",
     "V6": "R6: la rotación queda en el informe, los avisos y el .docx",
     "V7": "R7: anotaciones → 🟡 con tipo, rectángulo y contenido",
     "V8": "R8: imagen ≥ 3 % del área en página con texto → 🟡",
+    "V9": "R9: lista las cifras de la capa OCR que deben cotejarse contra la imagen (localización)",
     "V10": "R10: oráculo y convertidor extraen sin giro",
 }
 
@@ -294,6 +296,15 @@ def c_filas_preservadas(r, v):
                             f"(dibujo {v['orden_de_dibujo']}); gate {r['informe']['veredicto']}")
 
 
+def c_tabla_columnas_senalada(r, v):
+    if not aceptado(r):
+        return False, f"rechazado: {r['error']}"
+    d = pagina_de(r, 1)
+    texto = " ".join(d.get("hallazgos", []))
+    senalada = d.get("veredicto") != VERDE and "R3" in texto
+    return senalada, f"tabla dibujada por columnas → {d.get('veredicto')}: {texto[:90]}"
+
+
 def c_nunca_verde(r, v):
     if not aceptado(r):
         return True, "rechazado"
@@ -369,6 +380,8 @@ CHEQUEOS = {
     "oculto_no_certificado": ("visual", "texto no visible no sale 🟢 sin señalarse", c_oculto_no_certificado),
     "filas_preservadas": ("visual", "cada renglón de la tabla conserva sus celdas juntas y en orden",
                           c_filas_preservadas),
+    "tabla_columnas_senalada": ("visual", "una tabla dibujada por columnas no sale 🟢 (se señala R3)",
+                                c_tabla_columnas_senalada),
     "nunca_verde": ("visual", "sin oráculo confiable no se certifica 🟢", c_nunca_verde),
     "escaneo_no_verificable": ("visual", "la página escaneada sale 🟡 NO VERIFICABLE", c_escaneo_no_verificable),
     "discrepancia_localizada": ("visual", "la discrepancia capa OCR vs imagen se señala en concreto",
@@ -415,7 +428,7 @@ def construir_casos(manifiesto: dict) -> list:
              [("verde_si_fiel", None), ("filas_preservadas", None)]),
         caso("B2_md_columnas_intercambiadas", "sintetico_tabla_renglones", PERMUTACION, "intercambiar_columnas"),
         caso("B3_tabla_dibujada_por_columnas", "sintetico_tabla_columnas",
-             [("verde_si_fiel", None), ("filas_preservadas", "V3"), ("docx_sin_defecto_como_valido", "V3")]),
+             [("nunca_verde", None), ("tabla_columnas_senalada", "V3"), ("docx_sin_defecto_como_valido", "V3")]),
         caso("B4_md_renglones_intercambiados", "sintetico_tabla_renglones", PERMUTACION, "intercambiar_renglones"),
         caso("B5_md_publico_fechas_intercambiadas", "publico_original", PERMUTACION, "intercambiar_fechas"),
         caso("B6_control_md_cifra_alterada", "sintetico_tabla_renglones",

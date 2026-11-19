@@ -4,11 +4,11 @@ Comprueba si el sistema (banco: convertidor `visible` por defecto, o `minimo` do
 `gate_reforzado`, que corre el gate del kit, + exportación `.docx`) **detecta errores, conserva evidencia y evita
 producir texto jurídico aparentemente válido cuando no lo es**.
 
-**Estado (rama `feat/pdf2ctx-correcciones`):** `gate_reforzado.py` corrigió **V1, V2, V4, V5, V6, V7, V8 y V10**.
-Sus comprobaciones quedan como **guardias de regresión** (`CORREGIDAS` en `probar_defectos.py`): si vuelven a
-fallar, salen FALLA. Quedan pendientes **V3** (tabla dibujada por columnas: requiere análisis de maquetación) y
-**V9** (discrepancia entre capa OCR e imagen: requiere OCR). Hay casos de control contra falsos positivos (A8:
-marca de agua gris y texto blanco sobre franja oscura) y casos con el convertidor `minimo` (A1m, A6m, F1m) que
+**Estado (rama `feat/mejoras-legaltech`):** `gate_reforzado.py` corrigió **V1–V10**. Sus comprobaciones quedan como
+**guardias de regresión** (`CORREGIDAS` en `probar_defectos.py`): si vuelven a fallar, salen FALLA. Lo único que
+queda fuera es *leer la imagen* para corregir automáticamente el valor que discrepa en V9 (la localización de las
+cifras a cotejar ya está en R9; corregir el valor exige un motor OCR). Hay casos de control contra falsos positivos
+(A8: marca de agua gris y texto blanco sobre franja oscura) y casos con el convertidor `minimo` (A1m, A6m, F1m) que
 prueban que el gate *detecta* lo que ese convertidor no corrige.
 
 | Archivo | Qué es |
