@@ -39,7 +39,7 @@ import pypdfium2.raw as pdfium_c
 
 VERSION = "0.1.0-sprint0"
 
-ANCLA = re.compile(r"^\[\[p\. (\d+)\]\][ \t]*$", re.MULTILINE)
+ANCLA = re.compile(r"^\[\[p\. (\d+)\]\][ \t]*\r?$", re.MULTILINE)
 
 # Invariantes: lo que, si cambia, convierte un error de conversión en un error jurídico.
 # Se buscan sobre texto "plano" (minúsculas, sin acentos, espacios colapsados).

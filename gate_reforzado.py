@@ -20,10 +20,15 @@ Refuerzo · vulnerabilidad (ver defectos/INFORME_COBERTURA.md) · qué hace
   R6  V6  orientación        El /Rotate de cada página queda en el informe (aviso).
   R7  V7  anotaciones        Notas, sellos, firmas… (no vínculos) → 🟡 con tipo, rectángulo y contenido.
   R8  V8  imágenes           Imagen ≥ 3 % del área en una página con texto → 🟡: su contenido no está en el .md.
+  R3  V3  tabla por columnas Una malla de texto dibujada por columnas → 🟡: la lectura lineal pierde la
+                             asociación renglón–columna aunque sea fiel a la capa.
+  R9  V9  OCR por cotejar    En páginas con capa OCR previa, lista las cifras concretas por cotejar contra
+                             la imagen (localiza qué dato revisar; leer la imagen para corregir el valor
+                             exige OCR y queda fuera).
   R10 V10 páginas giradas    El oráculo se calcula sobre una copia sin /Rotate: PDFium altera el texto
                              que extrae de páginas giradas.
 
-Pendientes: V3 (orden visual de tablas: requiere análisis de maquetación) y V9 (requiere OCR).
+Pendientes: leer la imagen para corregir automáticamente el valor que discrepa en V9 (requiere un motor OCR).
 
 Uso
   python gate_reforzado.py visible   doc.pdf -o doc.md [--retiros doc.retiros.json]
@@ -55,6 +60,13 @@ MICROTEXTO_PT = 2.0
 CORRIDA_MIN = 6          # letras o dígitos mínimos para tratar una corrida como texto oculto
 IMAGEN_MIN = 0.03        # fracción del área: el escudo de la ley ocupa 1.07 % en cada página
 TOPE_FLUJO = 256 * 1024 * 1024
+
+# Tabla dibujada por columnas (R3): malla de filas × columnas alineadas cuyo orden de
+# dibujo es por columnas, lo que rompe la asociación renglón–columna en la lectura lineal.
+TABLA_FILAS_MIN = 3
+TABLA_COLS_MIN = 2
+TABLA_TOL_FILA = 14.0    # pt: dos centros con esta separación vertical se agrupan en la misma fila
+TABLA_TOL_COL = 16.0     # pt: agrupación de columnas por x
 
 RE_TOKEN = re.compile(r"\d+(?:[.,:/-]\d+)*|[a-z]+")
 RE_FOLIO = re.compile(r"^\s*(?:p[aá]gina\s+)?(\d{1,4})\s+de\s+(\d{1,4})\s*$", re.IGNORECASE | re.MULTILINE)
@@ -134,6 +146,67 @@ def _letras(texto: str) -> int:
     return len(re.sub(r"[^a-z0-9]", "", gate.plano(texto)))
 
 
+# ───────────────────────── tablas dibujadas por columnas (R3) ─────────────────────────
+
+def _agrupar_1d(valores, tol: float) -> list:
+    """Agrupa valores 1-D (ordenados) en centros de clúster separados por > tol."""
+    valores = sorted(valores)
+    grupos = []
+    for v in valores:
+        if grupos and v - grupos[-1][-1] <= tol:
+            grupos[-1].append(v)
+        else:
+            grupos.append([v])
+    return [sum(g) / len(g) for g in grupos]
+
+
+def _tabla_por_columnas(pagina) -> dict:
+    """Detecta una malla de texto dibujada por columnas. Devuelve métricas o None.
+
+    Una tabla dibujada por columnas tiene la capa de texto en orden column-major: el .md
+    lineal pierde la asociación renglón–columna aunque sea fiel a la capa. Se detecta cuando
+    (a) los objetos de texto forman una malla densa (≥3 filas × ≥2 columnas alineadas) y
+    (b) en el orden de dibujo hay una corrida de ≥TABLA_FILAS_MIN objetos consecutivos en la
+    misma columna.
+    """
+    objetos = list(pagina.get_objects(filter=[pdfium_c.FPDF_PAGEOBJ_TEXT]))
+    if len(objetos) < TABLA_FILAS_MIN * TABLA_COLS_MIN:
+        return None
+    puntos = []
+    for o in objetos:
+        izq, abajo, der, arriba = o.get_bounds()
+        # columnas por borde izquierdo (los centros varían con el ancho del texto);
+        # filas por centro vertical.
+        puntos.append((izq, (abajo + arriba) / 2))
+    xs = _agrupar_1d([x for x, _ in puntos], TABLA_TOL_COL)
+    ys = _agrupar_1d([y for _, y in puntos], TABLA_TOL_FILA)
+    if len(xs) < TABLA_COLS_MIN or len(ys) < TABLA_FILAS_MIN:
+        return None
+
+    def indice(v, lista):
+        return min(range(len(lista)), key=lambda i: abs(lista[i] - v))
+
+    fila_col = [(indice(y, ys), indice(x, xs)) for x, y in puntos]
+    cuenta_filas = Counter(f for f, _ in fila_col)
+    cuenta_cols = Counter(c for _, c in fila_col)
+    malla = [(f, c) for f, c in fila_col if cuenta_filas[f] >= 2 and cuenta_cols[c] >= 2]
+    filas = len({f for f, _ in malla})
+    columnas = len({c for _, c in malla})
+    if filas < TABLA_FILAS_MIN or columnas < TABLA_COLS_MIN:
+        return None
+    mejor, corrida, anterior = 1, 1, None
+    for f, c in malla:
+        if anterior is not None and c == anterior[1] and f != anterior[0]:
+            corrida += 1
+            mejor = max(mejor, corrida)
+        else:
+            corrida = 1
+        anterior = (f, c)
+    if mejor < TABLA_FILAS_MIN:
+        return None
+    return {"filas": filas, "columnas": columnas, "corrida_columna": mejor}
+
+
 def analizar_pagina(pagina, n: int) -> dict:
     rotacion = pagina.get_rotation()
     if rotacion:
@@ -172,7 +245,8 @@ def analizar_pagina(pagina, n: int) -> dict:
             cursor = c["fin"] + 1
     visible.append(texto[cursor:])
     return {"n": n, "rotacion": rotacion, "texto": texto, "texto_visible": "".join(visible),
-            "ocultos": ocultos, "imagenes_grandes": grandes, "anotaciones": _anotaciones(pagina)}
+            "ocultos": ocultos, "imagenes_grandes": grandes, "anotaciones": _anotaciones(pagina),
+            "tabla_columnas": _tabla_por_columnas(pagina)}
 
 
 # ───────────────────────── integridad del archivo (R4) ─────────────────────────
@@ -337,9 +411,15 @@ def verificar(ruta_pdf, ruta_md, ruta_retiros=None, cobertura_min: float = gate.
               desactivar=frozenset()) -> dict:
     analisis = analizar(ruta_pdf)
     paginas = analisis["paginas"]
-    with tempfile.TemporaryDirectory(prefix="pdf2ctx-") as temporal:
-        oraculo = _copia_sin_giro(ruta_pdf, analisis, Path(temporal))
-        informe = gate.verificar(oraculo, ruta_md, ruta_retiros, cobertura_min, desactivar)
+    giradas_para_oraculo = [p["n"] for p in paginas if p["rotacion"]]
+    # La copia sin giro (R10) solo es necesaria si hay páginas giradas; en el caso común
+    # no se crea ningún directorio temporal.
+    if giradas_para_oraculo:
+        with tempfile.TemporaryDirectory(prefix="pdf2ctx-") as temporal:
+            oraculo = _copia_sin_giro(ruta_pdf, analisis, Path(temporal))
+            informe = gate.verificar(oraculo, ruta_md, ruta_retiros, cobertura_min, desactivar)
+    else:
+        informe = gate.verificar(ruta_pdf, ruta_md, ruta_retiros, cobertura_min, desactivar)
     kit = {k: informe[k] for k in ("gate", "version", "veredicto", "codigo_salida", "resumen")}
     informe["pdf"], informe["sha256_pdf"] = str(ruta_pdf), analisis["sha256"]
 
@@ -388,6 +468,19 @@ def verificar(ruta_pdf, ruta_md, ruta_retiros=None, cobertura_min: float = gate.
             for img in p["imagenes_grandes"]:
                 extra[n].append((1, f"R8 imagen de {img['fraccion']:.1%} del área en {img['rect']}: "
                                     "su contenido no está en el .md; cotejar contra la página"))
+        # R3 · tabla dibujada por columnas
+        if p.get("tabla_columnas"):
+            t = p["tabla_columnas"]
+            extra[n].append((1, f"R3 tabla dibujada por columnas ({t['filas']} filas × {t['columnas']} "
+                                "columnas): la lectura lineal puede perder la asociación renglón–columna"))
+        # R9 · cifras de la capa OCR por cotejar contra la imagen (localiza qué dato revisar)
+        if clases.get(n) == "ocr_previo":
+            cifras = [k[1:] for k in gate.invariantes(gate.plano(p["texto"])) if k.startswith("#")]
+            if cifras:
+                extra[n].append((1, f"R9 capa OCR por cotejar contra la imagen: {', '.join(cifras[:12])}"
+                                    + (" …" if len(cifras) > 12 else "")))
+            else:
+                extra[n].append((1, "R9 capa OCR previa: cotejar contra la imagen"))
 
     # R1 sin anclas: el .md completo contra todo el texto oculto
     if paginas_md is None:
@@ -438,6 +531,8 @@ def verificar(ruta_pdf, ruta_md, ruta_retiros=None, cobertura_min: float = gate.
                       "texto_oculto": [{"pagina": p["n"], **o} for p in paginas for o in p["ocultos"]],
                       "anotaciones": [{"pagina": p["n"], **a} for p in paginas for a in p["anotaciones"]],
                       "imagenes_grandes": [{"pagina": p["n"], **i} for p in paginas for i in p["imagenes_grandes"]],
+                      "tablas_columnas": [{"pagina": p["n"], **p["tabla_columnas"]}
+                                          for p in paginas if p.get("tabla_columnas")],
                       "folios": {"hallazgos": hallazgos_folio, "avisos": avisos_folio}},
     })
     return informe
